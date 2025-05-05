@@ -23,6 +23,8 @@ node("master") {
         jira.checkJira()
         echo "Jira check succeed, checking submit status"
         gerrit.checkSubmitStatus(deployTarget)
+
+        stash includes: 'scripts/*,ext/*', name: 'jenkinsfile-scripts'
     }
 }
 
@@ -40,6 +42,8 @@ node(agentLabel) {
              ./pre-build.sh
            fi 
         """
+
+        unstash 'jenkinsfile-scripts'
 
         ansiColor('xterm') {
             sh """

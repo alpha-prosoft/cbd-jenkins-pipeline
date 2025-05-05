@@ -22,6 +22,8 @@ node("master") {
         jira.checkJira()
         echo "Jira check succeed, checking submit status"
         gerrit.checkSubmitStatus(deployTarget)
+
+        stash includes: 'scripts/*,ext/*', name: 'jenkinsfile-scripts'
     }
 }
 
@@ -41,6 +43,12 @@ node(agentLabel) {
               exit 1
             fi
           fi
+        """
+
+        unstash 'jenkinsfile-scripts'
+
+        sh """#!/bin/bash
+          set -euo pipefail
 
           echo "Checking permissions, me: "
           id
@@ -65,8 +73,7 @@ node(agentLabel) {
             mkdir -p test 
             mkdir -p api
             mkdir -p schema
-
-
+            cp ../../scripts . -r
 
             docker build ${GLOBAL_PROPERTIES_DOCKER_BUILD_ARGS} --build-arg BUILD_ID=${BUILD_ID} \
               --build-arg DEPLOY_TARGET=DEV \

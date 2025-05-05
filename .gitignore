@@ -3,3 +3,4 @@ gradle
 .gradle
 lib
 build
+.aider*
