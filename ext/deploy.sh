@@ -17,6 +17,10 @@ done
 echo "Role ${ROLE:-}"
 echo "Tags ${TAGS:-}"
 
+echo "Current environment"
+env
+
+echo "######################"
 
 ls -la /dist/ansible/deploy/roles
 
@@ -31,6 +35,16 @@ ls -la /var/run/docker.sock
 echo "Prepare request directory"
 export work_dir="/dist/${BUILD_ID}"
 mkdir -p $work_dir
+
+if [[ -z "${SERVICE_NAME:-}" ]]; then 
+  export ServiceName="${SERVICE_NAME}"
+fi
+
+if [[ -z "${PROJECT_NAME:-}" ]]; then 
+  export ServiceName="${PROJECT_NAME}"
+fi
+
+echo "Building ${ProjectName}/${ServiceName}"
 
 echo "We are running inside ${work_dir}"
 

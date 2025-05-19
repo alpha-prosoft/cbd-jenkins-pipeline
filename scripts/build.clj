@@ -88,6 +88,7 @@
                 src-dirs
                 resource-dirs
                 uber-file
+                ns-compile
                 main] :as merged-opts}
         (merge (build-opts opts) opts)]
     (println "Building UberJAR:" uber-file)
@@ -104,7 +105,7 @@
                                   (vec))
 
           compile-namespaces 
-          (conj compile-namespaces (symbol main))]
+          (conj compile-namespaces (symbol ns-compile))]
 
       (if (seq compile-namespaces)
         (println "Found namespaces to compile from dependencies:" compile-namespaces)
