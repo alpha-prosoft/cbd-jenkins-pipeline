@@ -41,7 +41,7 @@ if [[ -z "${SERVICE_NAME:-}" ]]; then
 fi
 
 if [[ -z "${PROJECT_NAME:-}" ]]; then 
-  export ServiceName="${PROJECT_NAME}"
+  export ProjectName="${PROJECT_NAME}"
 fi
 
 echo "Building ${ProjectName}/${ServiceName}"
