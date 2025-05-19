@@ -36,11 +36,11 @@ echo "Prepare request directory"
 export work_dir="/dist/${BUILD_ID}"
 mkdir -p $work_dir
 
-if [[ -z "${SERVICE_NAME:-}" ]]; then 
+if [[ ! -z "${SERVICE_NAME:-}" ]]; then 
   export ServiceName="${SERVICE_NAME}"
 fi
 
-if [[ -z "${PROJECT_NAME:-}" ]]; then 
+if [[ ! -z "${PROJECT_NAME:-}" ]]; then 
   export ProjectName="${PROJECT_NAME}"
 fi
 
