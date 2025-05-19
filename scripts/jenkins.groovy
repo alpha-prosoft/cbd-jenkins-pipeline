@@ -35,7 +35,6 @@ def runTests(accountId, environmentNameUpper, deployTarget) {
             export DEPLOY_TARGET="${deployTarget}"
 
             export TargetAccountId="${accountId}"
-            export ServiceName="\${PROJECT_NAME}"
             export EnvironmentNameUpper="${environmentNameUpper}"
 
             export BUILD_DOCKER_IMAGE="${env.DOCKER_URL}/${DOCKER_ORG}/${JOB_BASE_NAME}:b${BUILD_ID}"
@@ -58,7 +57,6 @@ def deploy(accountId, environmentNameUpper, deployTarget) {
             export ENVIRONMENT_NAME="${environmentNameUpper}"
             
             export TargetAccountId="${accountId}"
-            export ServiceName="\${PROJECT_NAME}"
             export EnvironmentNameUpper="${environmentNameUpper}"
             
             export DEPLOY_TARGET="${deployTarget}"

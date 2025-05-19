@@ -36,7 +36,6 @@ def deploy(accountId, environmentNameUpper, deployTarget) {
             export ENVIRONMENT_NAME="${environmentNameUpper}"
             
             export TargetAccountId="${accountId}"
-            export ServiceName="\${PROJECT_NAME}"
             export EnvironmentNameUpper="${environmentNameUpper}"
             
             export DEPLOY_TARGET="${deployTarget}"
