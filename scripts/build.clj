@@ -104,6 +104,9 @@
                                   (distinct)
                                   (vec))
 
+          _
+          (print "Praparing ns for compile: " ns-compile)
+          
           compile-namespaces 
           (conj compile-namespaces (symbol ns-compile))]
 
