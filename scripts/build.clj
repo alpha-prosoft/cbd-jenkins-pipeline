@@ -105,10 +105,12 @@
                                   (vec))
 
           _
-          (print "Praparing ns for compile: " ns-compile)
+          (println "Explicit compilation request: " ns-compile)
           
           compile-namespaces 
-          (conj compile-namespaces (symbol ns-compile))]
+          (if ns-compile
+            (conj compile-namespaces (symbol ns-compile))
+            compile-namespaces)]
 
       (if (seq compile-namespaces)
         (println "Found namespaces to compile from dependencies:" compile-namespaces)
