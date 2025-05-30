@@ -118,8 +118,8 @@
             compile-namespaces)]
 
       (if (seq compile-namespaces)
-        (println "Found namespaces to compile from dependencies:" compile-namespaces)
-        (println "No :ns-compile directives found in dependency META-INF/build.edn files."))
+        (println "Found namespaces to AOT compile expcitly:" compile-namespaces)
+        (println "No namespaces found to compile in META-INF/build.edn files or no main provided. Kinda strange"))
 
       (println "Writing pom file")
       (b/write-pom {:class-dir class-dir
