@@ -110,6 +110,11 @@
           compile-namespaces 
           (if ns-compile
             (conj compile-namespaces (symbol ns-compile))
+            compile-namespaces)
+          
+          compile-namespaces 
+          (if main
+            (conj compile-namespaces (symbol main))
             compile-namespaces)]
 
       (if (seq compile-namespaces)
