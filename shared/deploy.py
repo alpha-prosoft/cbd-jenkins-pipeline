@@ -266,12 +266,12 @@ def deploy_cloudformation(aws_region, stack_name, template_body, cf_parameters):
             print(f"Could not retrieve stack events: {event_error}")
         raise # Re-raise the original wait_error
 
-def get_stack_outputs(aws_region, environment_name, base_stack_name):
+def get_stack_outputs(aws_region, project_name, environment_name, base_stack_name):
     """
-    Retrieves outputs from a CloudFormation stack (identified by environment_name and base_stack_name) 
+    Retrieves outputs from a CloudFormation stack (identified by project_name, environment_name, and base_stack_name)
     and returns them as a dictionary.
     """
-    actual_stack_name = f"{environment_name.upper()}-{base_stack_name}".replace('_', '-')
+    actual_stack_name = f"{project_name.upper()}-{environment_name.upper()}-{base_stack_name}".replace('_', '-')
     
     print(f"Attempting to retrieve outputs for stack: {actual_stack_name} in region {aws_region}...")
     cf_client = boto3.client('cloudformation', region_name=aws_region)
@@ -311,7 +311,7 @@ def get_stack_outputs(aws_region, environment_name, base_stack_name):
     
     return retrieved_outputs
 
-def deploy(aws_account_id, aws_region, aws_cloudformation_file, project_name, deployment_name, deployment_type, environment_name, hosted_zone_suffix):
+def deploy(aws_account_id, aws_region, aws_cloudformation_file, project_name, deployment_name, deployment_type, environment_name, hosted_zone_suffix, parent_stacks_csv=None):
     """
     Placeholder function to deploy AWS CloudFormation stacks.
     """
@@ -351,11 +351,31 @@ def deploy(aws_account_id, aws_region, aws_cloudformation_file, project_name, de
     # Get outputs from a specific global/core stack
     # Note: "us-east-1" is hardcoded here as per original logic for this specific stack.
     # 'environment_name' from the main CLI args is used to prefix this global/core stack.
-    core_global_base_stack_name = "CORE-aviowiki-global"
-    core_global_outputs = get_stack_outputs("us-east-1", environment_name, core_global_base_stack_name)
-    print(f"Outputs from {environment_name.upper()}-{core_global_base_stack_name} stack: {core_global_outputs}")
+    core_global_base_stack_name = "CORE-global" # This is the base name after PROJECT-ENV prefix
+    core_global_outputs = get_stack_outputs("us-east-1", project_name, environment_name, core_global_base_stack_name)
+    # Construct the full name for logging consistent with how get_stack_outputs does it
+    full_core_stack_name = f"{project_name.upper()}-{environment_name.upper()}-{core_global_base_stack_name}".replace('_', '-')
+    print(f"Outputs from {full_core_stack_name} stack: {core_global_outputs}")
     params.update(core_global_outputs)
     # The "Initial parameters gathered" log will now reflect params after this merge.
+
+    if parent_stacks_csv:
+        parent_stack_base_names = [name.strip() for name in parent_stacks_csv.split(',') if name.strip()]
+        if parent_stack_base_names:
+            print(f"Processing parent stacks for additional parameters: {parent_stack_base_names}")
+            for parent_stack_base_name in parent_stack_base_names:
+                # Construct the full name for logging consistent with how get_stack_outputs does it
+                full_parent_stack_name = f"{project_name.upper()}-{environment_name.upper()}-{parent_stack_base_name}".replace('_', '-')
+                print(f"Retrieving outputs from parent stack: {full_parent_stack_name} in region {aws_region}...")
+                parent_outputs = get_stack_outputs(aws_region, project_name, environment_name, parent_stack_base_name)
+                if parent_outputs:
+                    print(f"Adding outputs from parent stack {full_parent_stack_name}: {parent_outputs}")
+                    params.update(parent_outputs)
+                else:
+                    print(f"No outputs found or retrieved for parent stack {full_parent_stack_name}.")
+        else:
+            print("No valid parent stack names found in --parent-stacks input.")
+
 
     print(f"Initial parameters gathered: {params}")
 
@@ -403,9 +423,9 @@ def deploy(aws_account_id, aws_region, aws_cloudformation_file, project_name, de
     # Construct the stack name: ENVIRONMENTNAMEUPPER-deploymenttype-projectname-deploymentname
     # All parts are lowercased and hyphenated, except environment_name which is uppercased.
     stack_name_parts = [
+        project_name.upper(),
         environment_name.upper(),
         deployment_type,
-        project_name,
         deployment_name
     ]
     stack_name = "-".join(stack_name_parts).replace('_', '-')
@@ -417,17 +437,18 @@ def deploy(aws_account_id, aws_region, aws_cloudformation_file, project_name, de
     print("CloudFormation deployment process completed successfully or no updates were needed.")
 
     # Get and merge stack outputs from the deployed stack into params
-    # Construct the base name for the deployed stack (everything after the ENVUPPER- prefix)
+    # Construct the base name for the deployed stack (everything after the PROJECTUPPER-ENVUPPER- prefix)
     deployed_base_stack_name_parts = [
         deployment_type,
-        project_name,
+        # project_name is now part of the prefix in get_stack_outputs
         deployment_name
     ]
-    deployed_base_stack_name = "-".join(deployed_base_stack_name_parts).replace('_', '-')
+    deployed_base_stack_name = "-".join(deployed_base_stack_name_parts).replace('_', '-') # This will be TYPE-DEPLOYMENTNAME
     
-    deployed_stack_outputs = get_stack_outputs(aws_region, environment_name, deployed_base_stack_name)
-    # The 'stack_name' variable already holds the fully constructed name (ENVUPPER-base)
-    print(f"Outputs from deployed stack '{stack_name}': {deployed_stack_outputs}")
+    # The 'stack_name' variable (e.g., PROJECTUPPER-ENVUPPER-TYPE-DEPLOYMENTNAME) is the one we are getting outputs from.
+    # get_stack_outputs will reconstruct this name using project_name, environment_name, and the new deployed_base_stack_name.
+    deployed_stack_outputs = get_stack_outputs(aws_region, project_name, environment_name, deployed_base_stack_name)
+    print(f"Outputs from deployed stack '{stack_name}': {deployed_stack_outputs}") # stack_name should be correct here
     params.update(deployed_stack_outputs)
     print(f"Final parameters after merging stack outputs: {params}")
     
@@ -459,7 +480,18 @@ if __name__ == "__main__":
     parser.add_argument("--hosted-zone",
                         required=True,
                         help="The suffix of the hosted zone to search for (e.g., mycompany.com).")
+    parser.add_argument("--parent-stacks",
+                        required=False,
+                        help="Comma-separated list of parent stack base names to fetch outputs from (e.g., 'stack1-base,stack2-base').")
     
     args = parser.parse_args()
     
-    deploy(args.aws_account_id, args.aws_region, args.aws_cloudformation_file, args.project_name, args.deployment_name, args.deployment_type, args.environment_name, args.hosted_zone)
+    deploy(args.aws_account_id, 
+           args.aws_region, 
+           args.aws_cloudformation_file, 
+           args.project_name, 
+           args.deployment_name, 
+           args.deployment_type, 
+           args.environment_name, 
+           args.hosted_zone,
+           args.parent_stacks)
