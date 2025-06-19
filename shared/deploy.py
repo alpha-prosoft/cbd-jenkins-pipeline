@@ -253,17 +253,31 @@ def deploy_cloudformation(aws_region, stack_name, template_body, cf_parameters):
         return True
     except Exception as wait_error:
         print(f"Error waiting for stack {stack_name} operation: {wait_error}")
-        # Optionally, describe stack events here for more detailed error output
+        # Log all stack events
+        print(f"Attempting to retrieve all stack events for {stack_name} due to error...")
+        all_events = []
         try:
-            events_response = cf_client.describe_stack_events(StackName=stack_name)
-            print("Recent stack events:")
-            for event in events_response['StackEvents'][:10]: # Print last 10 events
-                ts = event.get('Timestamp').strftime('%Y-%m-%d %H:%M:%S')
-                resource_status = event.get('ResourceStatus', '')
-                reason = event.get('ResourceStatusReason', '')
-                print(f"  {ts} - {event.get('ResourceType')} - {event.get('LogicalResourceId')} - {resource_status} - {reason}")
+            paginator = cf_client.get_paginator('describe_stack_events')
+            for page in paginator.paginate(StackName=stack_name):
+                all_events.extend(page['StackEvents'])
+            
+            if all_events:
+                # Events are typically returned newest first. To display chronologically (oldest first):
+                all_events.reverse() 
+                print("All stack events (chronological order):")
+                for event in all_events:
+                    ts = event.get('Timestamp').strftime('%Y-%m-%d %H:%M:%S')
+                    resource_type = event.get('ResourceType', '')
+                    logical_id = event.get('LogicalResourceId', '')
+                    resource_status = event.get('ResourceStatus', '')
+                    reason = event.get('ResourceStatusReason', '')
+                    # Ensure reason is a string and escape newlines for cleaner printing
+                    reason_str = str(reason).replace('\n', ' ') if reason else ''
+                    print(f"  {ts} - {resource_type} - {logical_id} - {resource_status} - {reason_str}")
+            else:
+                print(f"No stack events found for {stack_name}.")
         except Exception as event_error:
-            print(f"Could not retrieve stack events: {event_error}")
+            print(f"Could not retrieve all stack events for {stack_name}: {event_error}")
         raise # Re-raise the original wait_error
 
 def get_stack_outputs(aws_region, project_name, environment_name, base_stack_name):
@@ -311,9 +325,9 @@ def get_stack_outputs(aws_region, project_name, environment_name, base_stack_nam
     
     return retrieved_outputs
 
-def deploy(aws_account_id, aws_region, aws_cloudformation_file, project_name, deployment_name, deployment_type, environment_name, hosted_zone_suffix, parent_stacks_csv=None):
+def deploy(aws_account_id, aws_region, aws_cloudformation_file, project_name, deployment_name, deployment_type, environment_name, hosted_zone_suffix, parent_stacks_csv=None, cli_params_list=None):
     """
-    Placeholder function to deploy AWS CloudFormation stacks.
+    Deploys AWS CloudFormation stacks, incorporating parameters from various sources including direct CLI inputs.
     """
     print("Deploying CloudFormation stack...")
     print(f"AWS Account ID: {aws_account_id}")
@@ -419,6 +433,31 @@ def deploy(aws_account_id, aws_region, aws_cloudformation_file, project_name, de
                 #     'ParameterValue': str(param_details['Default'])
                 # })
 
+    # Process additional --param arguments from CLI
+    if cli_params_list:
+        print(f"Processing additional CLI parameters: {cli_params_list}")
+        cli_param_dict = {}
+        for p_str in cli_params_list:
+            if '=' in p_str:
+                key, value = p_str.split('=', 1)
+                cli_param_dict[key] = value
+            else:
+                print(f"Warning: CLI parameter '{p_str}' is not in KEY=VALUE format and will be ignored.")
+
+        # Update cf_deploy_params: override existing or add new
+        # Create a dictionary of existing cf_deploy_params for easier lookup
+        existing_cf_keys = {p['ParameterKey']: p for p in cf_deploy_params}
+        
+        for key, value in cli_param_dict.items():
+            if key in existing_cf_keys:
+                print(f"Overriding CloudFormation parameter '{key}' with value from --param: '{value}'")
+                existing_cf_keys[key]['ParameterValue'] = str(value)
+            else:
+                print(f"Adding new CloudFormation parameter from --param: '{key}' = '{value}'")
+                cf_deploy_params.append({
+                    'ParameterKey': key,
+                    'ParameterValue': str(value)
+                })
 
     # Construct the stack name: ENVIRONMENTNAMEUPPER-deploymenttype-projectname-deploymentname
     # All parts are lowercased and hyphenated, except environment_name which is uppercased.
@@ -483,6 +522,10 @@ if __name__ == "__main__":
     parser.add_argument("--parent-stacks",
                         required=False,
                         help="Comma-separated list of parent stack base names to fetch outputs from (e.g., 'stack1-base,stack2-base').")
+    parser.add_argument("--param",
+                        action='append',
+                        default=[],
+                        help="Additional parameters to pass directly to CloudFormation in 'KEY=VALUE' format. Can be specified multiple times. These override other gathered parameters if keys conflict.")
     
     args = parser.parse_args()
     
@@ -494,4 +537,5 @@ if __name__ == "__main__":
            args.deployment_type, 
            args.environment_name, 
            args.hosted_zone,
-           args.parent_stacks)
+           args.parent_stacks,
+           args.param)
