@@ -231,7 +231,9 @@ python shared/deploy.py \
     --deployment-type "service" \
     --environment-name "dev" \
     --hosted-zone "example.com" \
-    --parent-stacks "networking-base,security-base"
+    --parent-stacks "networking-base,security-base" \
+    --param "InstanceType=t3.micro" \
+    --param "CustomTag=WebApp1"
 ```
 
 **Key Arguments:**
@@ -244,4 +246,5 @@ python shared/deploy.py \
 *   `--environment-name`: The name of the environment (e.g., dev, staging, prod).
 *   `--hosted-zone`: The suffix of the hosted zone (e.g., mycompany.com) for DNS record creation.
 *   `--parent-stacks`: (Optional) Comma-separated list of parent stack base names to fetch outputs from, which are then available as parameters for the CloudFormation template.
+*   `--param`: (Optional) Key-value pairs to pass directly to the CloudFormation template. Can be specified multiple times (e.g., `--param Key1=Value1 --param Key2=Value2`). These parameters will override any other parameters gathered from VPC, subnets, hosted zones, or parent stacks if the keys conflict.
 ```
