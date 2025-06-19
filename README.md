@@ -183,3 +183,65 @@ You can check why a job failed in Jenkins by viewing the corresponding Jenkins j
 For more information how to use Gerrit and Jenkins check out the following guides:
 * [Jenkins User Documentation](https://jenkins.io/doc/)
 * [Gerrit User Guide](https://gerrit-review.googlesource.com/Documentation/intro-user.html)
+
+## Script Usage Examples
+
+### `shared/render.py`
+
+This script is used to render Jinja2 templates, typically for configuration files or deployment artifacts. It can pull initial parameters from CloudFormation stack outputs and allow overriding or adding new parameters via the command line.
+
+**Example:**
+
+```bash
+python shared/render.py \
+    --template-file path/to/your/template.j2 \
+    --output-file path/to/your/output.yaml \
+    --aws-region us-east-1 \
+    --project-name MyProject \
+    --environment-name dev \
+    --parent-stacks "core-global,vpc-main" \
+    --stack-params-whitelist "VpcId,PublicSubnetIds,PrivateHostedZoneId" \
+    --param "CustomKey1=CustomValue1" \
+    --param "AnotherKey=AnotherValue"
+```
+
+**Key Arguments:**
+*   `--template-file`: Path to the Jinja2 template.
+*   `--output-file`: Path where the rendered output will be saved.
+*   `--aws-region`: AWS region for fetching parent stack outputs.
+*   `--project-name`: Project name, used in constructing parent stack names.
+*   `--environment-name`: Environment name (e.g., dev, prod), used in constructing parent stack names.
+*   `--parent-stacks`: (Optional) Comma-separated list of base names for parent CloudFormation stacks whose outputs will be used as initial parameters.
+*   `--stack-params-whitelist`: (Optional) Comma-separated list of parameter keys. If provided, only these specified keys will be included from the `--parent-stacks` outputs into the `web_config`.
+*   `--param`: (Optional) Key-value pairs to pass to the template. Can be specified multiple times. These override values from parent stacks (even whitelisted ones) if keys conflict.
+
+### `shared/deploy.py`
+
+This script is used to deploy AWS CloudFormation stacks. It gathers various parameters from AWS environment (VPC, Subnets, Hosted Zones), parent stack outputs, and command-line arguments to deploy a specified CloudFormation template.
+
+**Example:**
+
+```bash
+python shared/deploy.py \
+    --aws-account-id "123456789012" \
+    --aws-region "us-east-1" \
+    --aws-cloudformation-file "path/to/your/cloudformation.yaml" \
+    --project-name "MyProject" \
+    --deployment-name "my-service" \
+    --deployment-type "service" \
+    --environment-name "dev" \
+    --hosted-zone "example.com" \
+    --parent-stacks "networking-base,security-base"
+```
+
+**Key Arguments:**
+*   `--aws-account-id`: Your AWS Account ID.
+*   `--aws-region`: The AWS region for deployment.
+*   `--aws-cloudformation-file`: Path to the CloudFormation template file.
+*   `--project-name`: The name of the project.
+*   `--deployment-name`: The name for this specific deployment (e.g., a service name).
+*   `--deployment-type`: The type of deployment (e.g., service, job, vpc).
+*   `--environment-name`: The name of the environment (e.g., dev, staging, prod).
+*   `--hosted-zone`: The suffix of the hosted zone (e.g., mycompany.com) for DNS record creation.
+*   `--parent-stacks`: (Optional) Comma-separated list of parent stack base names to fetch outputs from, which are then available as parameters for the CloudFormation template.
+```
