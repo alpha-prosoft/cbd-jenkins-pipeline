@@ -441,7 +441,6 @@ def deploy(aws_account_id, aws_region, aws_cloudformation_file, project_name, de
                 print(f"    {param_key}: {param_value}")
         else:
             if 'Default' not in param_details:
-                param_value = str(params[param_key])
                 print(f"    {param_key}: <<< MISSING")
             else:
                 print(f"    {param_key}: {param_details['Default']} (default)")
