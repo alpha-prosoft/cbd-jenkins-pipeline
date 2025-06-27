@@ -1,5 +1,6 @@
 import argparse
 import boto3
+import json
 import yaml
 import time
 import subprocess
@@ -355,11 +356,23 @@ def deploy(aws_account_id, aws_region, aws_cloudformation_file, project_name, de
         except FileNotFoundError:
             print("Warning: git command not found. BuildId will not be set automatically.")
 
-    print(f"Initial parameters gathered: {params}")
-    for key, value in params.items(): 
-        print(f"    {key}: {value}")
 
-    
+
+    ssm_client = boto3.client('ssm', region_name=aws_region)
+    param_store_key = f"/deploy/{params['EnvironmentNameLower']}/params.json"
+    print(f"Checking for parameters in SSM Parameter Store at key: {param_store_key}")
+    try:
+        response = ssm_client.get_parameter(Name=param_store_key, WithDecryption=True)
+        param_value = response['Parameter']['Value']
+        print("Found parameters in SSM Parameter Store. Merging them.")
+        ssm_params = json.loads(param_value)
+        params.update(ssm_params)
+        print(f"Merged parameters from SSM: {ssm_params}")
+    except ssm_client.exceptions.ParameterNotFound:
+        print(f"No parameters found in SSM Parameter Store at {param_store_key}. Skipping.")
+    except Exception as e:
+        print(f"Error fetching or parsing parameters from SSM Parameter Store: {e}")
+
     cli_param_dict_parsed = {}
     if cli_params_list:
         print(f"Processing CLI parameters from --param to update gathered params: {cli_params_list}")
@@ -421,7 +434,11 @@ def deploy(aws_account_id, aws_region, aws_cloudformation_file, project_name, de
                 'ParameterKey': param_key,
                 'ParameterValue': param_value
             })
-            print(f"    {param_key}: {param_value}")
+
+            if param_details.get('NoEcho'):
+                print(f"    {param_key}: ****")
+            else:
+                print(f"    {param_key}: {param_value}")
         else:
             if 'Default' not in param_details:
                 param_value = str(params[param_key])
