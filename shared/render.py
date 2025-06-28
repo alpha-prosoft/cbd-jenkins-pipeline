@@ -49,9 +49,6 @@ def get_initial_web_config_from_stacks(aws_region, project_name, environment_nam
                                 initial_web_config.update(filtered_outputs)
                             else:
                                 print(f"No whitelisted outputs found in parent stack '{full_stack_name_for_log}'. Original outputs: {outputs}")
-                        else:
-                            print(f"Adding all outputs from parent stack '{full_stack_name_for_log}': {outputs}")
-                            initial_web_config.update(outputs)
                     else:
                         print(f"No outputs found or retrieved for parent stack '{project_name.upper()}-{environment_name.upper()}-{base_stack_name}'.")
                 except Exception as e:
