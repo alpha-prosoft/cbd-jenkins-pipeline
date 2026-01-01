@@ -32,7 +32,7 @@ node("master") {
         echo "Jira check succeed, checking submit status"
         gerrit.checkSubmitStatus(deployTarget)
 
-        stash includes: 'scripts/*,ext/*', name: 'jenkinsfile-scripts'
+        stash includes: 'scripts/*,ext/*,shared/*', name: 'jenkinsfile-scripts'
     }
   }
 }
