@@ -99,6 +99,7 @@ params=$(echo "${target_access}" |
   jq '. + {"BuildId" : "'${BUILD_ID}'",
           "Version" : "'${BUILD_ID}'",
           "Region" : "'${AWS_DEFAULT_REGION}'",
+          "AccountId" : "'${TargetAccountId}'",
           "EnvironmentNameUpper" : "'${EnvironmentNameUpper}'",
           "EnvironmentNameLower" : "'${EnvironmentNameUpper,,}'",
           "ProjectName" : "'${ProjectName:-alpha}'",
