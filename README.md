@@ -199,7 +199,7 @@ python shared/render.py \
     --aws-region us-east-1 \
     --project-name MyProject \
     --environment-name dev \
-    --parent-stacks "core-global,vpc-main" \
+    --parent-stacks "CORE-global@us-east-1,vpc-main" \
     --stack-params-whitelist "VpcId,PublicSubnetIds,PrivateHostedZoneId" \
     --param "CustomKey1=CustomValue1" \
     --param "AnotherKey=AnotherValue"
@@ -211,7 +211,7 @@ python shared/render.py \
 *   `--aws-region`: AWS region for fetching parent stack outputs.
 *   `--project-name`: Project name, used in constructing parent stack names.
 *   `--environment-name`: Environment name (e.g., dev, prod), used in constructing parent stack names.
-*   `--parent-stacks`: (Optional) Comma-separated list of base names for parent CloudFormation stacks whose outputs will be used as initial parameters.
+*   `--parent-stacks`: (Optional) Comma-separated parent stack names with optional region (e.g., 'CORE-global@us-east-1,CORE-vpc,CORE-network@eu-west-1'). Region defaults to --region if not specified.
 *   `--stack-params-whitelist`: (Optional) Comma-separated list of parameter keys. If provided, only these specified keys will be included from the `--parent-stacks` outputs into the `web_config`.
 *   `--param`: (Optional) Key-value pairs to pass to the template. Can be specified multiple times. These override values from parent stacks (even whitelisted ones) if keys conflict.
 
@@ -231,7 +231,7 @@ python shared/deploy.py \
     --deployment-type "service" \
     --environment-name "dev" \
     --hosted-zone "example.com" \
-    --parent-stacks "networking-base,security-base" \
+    --parent-stacks "CORE-global@us-east-1,networking-base,security-base" \
     --param "InstanceType=t3.micro" \
     --param "CustomTag=WebApp1"
 ```
@@ -245,6 +245,6 @@ python shared/deploy.py \
 *   `--deployment-type`: The type of deployment (e.g., service, job, vpc).
 *   `--environment-name`: The name of the environment (e.g., dev, staging, prod).
 *   `--hosted-zone`: The suffix of the hosted zone (e.g., mycompany.com) for DNS record creation.
-*   `--parent-stacks`: (Optional) Comma-separated list of parent stack base names to fetch outputs from, which are then available as parameters for the CloudFormation template.
+*   `--parent-stacks`: (Optional) Comma-separated parent stack names with optional region (e.g., 'CORE-global@us-east-1,CORE-vpc,CORE-network@eu-west-1'). Region defaults to --region if not specified. Outputs from these stacks are then available as parameters for the CloudFormation template.
 *   `--param`: (Optional) Key-value pairs to pass directly to the CloudFormation template. Can be specified multiple times (e.g., `--param Key1=Value1 --param Key2=Value2`). These parameters will override any other parameters gathered from VPC, subnets, hosted zones, or parent stacks if the keys conflict.
 ```

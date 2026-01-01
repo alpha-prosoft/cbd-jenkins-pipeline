@@ -47,9 +47,8 @@ flowchart TD
     Base --> VPC[AWS VPC Discovery]
     VPC --> HZ[Hosted Zone Discovery]
     HZ --> Subnet[Subnet Discovery]
-    Subnet --> CoreStack[Core Global Stack Outputs]
-    CoreStack --> ParentStacks{Parent Stacks<br/>Specified?}
-    ParentStacks -->|Yes| FetchParent[Fetch Parent Stack Outputs]
+    Subnet --> ParentStacks{Parent Stacks<br/>Specified?}
+    ParentStacks -->|Yes| FetchParent[Fetch Parent Stack Outputs<br/>with per-stack regions]
     ParentStacks -->|No| BuildId[Generate BuildId from Git]
     FetchParent --> BuildId
     BuildId --> CLIOverride{CLI Params<br/>Provided?}
@@ -78,11 +77,10 @@ graph LR
 
 **Priority (Highest to Lowest):**
 1. **CLI Parameter Overrides** (`--param KEY=VALUE`) - Highest priority
-2. **Parent Stack Outputs** (from specified parent stacks)
-3. **Core Global Stack Outputs** (from us-east-1 CORE-global stack)
-4. **Auto-generated Values** (BuildId from git)
-5. **AWS Infrastructure Discovery** (VPC, Subnets, Hosted Zones)
-6. **Base CLI Arguments** (AccountId, Region, ProjectName, etc.)
+2. **Parent Stack Outputs** (from specified parent stacks with optional per-stack regions)
+3. **Auto-generated Values** (BuildId from git)
+4. **AWS Infrastructure Discovery** (VPC, Subnets, Hosted Zones)
+5. **Base CLI Arguments** (AccountId, Region, ProjectName, etc.)
 
 ---
 
@@ -93,8 +91,7 @@ graph LR
 | **CLI Arguments** | `AccountId`, `Region`, `ProjectName`, `EnvironmentName` | Always (required) | No (base values) |
 | **AWS Discovery** | `VPCId`, `VPCCidr`, Subnet IDs by name, `PrivateHostedZoneId`, `PublicHostedZoneId` | When AWS resources exist | No |
 | **Auto-generated** | `BuildId` (from git hash) | If not already in params | AWS Discovery |
-| **Core Stack** | Global stack outputs (e.g., ACM certificates, shared resources) | If stack exists in us-east-1 | Auto-generated |
-| **Parent Stacks** | Stack-specific outputs (e.g., network configs, database endpoints) | If `--parent-stacks` specified | Core Stack |
+| **Parent Stacks** | Stack-specific outputs (e.g., network configs, database endpoints). Supports per-stack region via `{stack}@{region}` format. | If `--parent-stacks` specified | Auto-generated |
 | **CLI Overrides** | Any `KEY=VALUE` from `--param` | If `--param` provided | Everything |
 
 ---
@@ -132,6 +129,16 @@ graph LR
 - Example: `MYPROJECT-DEV-CORE-global`
 - Note: `params.py` does NOT construct stack names, only returns parameters
 
+### 6. Parent Stacks Region Specification
+- Format: `{stack_name}@{region}` or just `{stack_name}`
+- If `@{region}` omitted, uses deployment region (`--region`)
+- Each parent stack can specify its own region
+- Examples:
+  - `CORE-global@us-east-1` - Fetches from us-east-1
+  - `CORE-vpc` - Fetches from deployment region
+  - `CORE-global@us-east-1,CORE-vpc,CORE-network@eu-west-1` - Mixed regions
+- **Breaking Change:** The automatic CORE-global stack fetching has been removed. If you need CORE-global outputs, you must explicitly include it in `--parent-stacks` (e.g., `--parent-stacks CORE-global@us-east-1`)
+
 ---
 
 ## Resolution Sequence Diagram
@@ -151,12 +158,12 @@ sequenceDiagram
     AWS-->>Script: Hosted zone data
     Script->>AWS: Describe subnets
     AWS-->>Script: Subnet data
-    Script->>Stack: Get CORE-global stack (us-east-1)
-    Stack-->>Script: Core stack outputs
     
     alt Parent stacks specified
-        Script->>Stack: Get parent stack outputs
-        Stack-->>Script: Parent outputs
+        loop Each parent stack
+            Script->>Stack: Get stack outputs (per-stack region)
+            Stack-->>Script: Parent outputs
+        end
     end
     
     Script->>Script: Generate BuildId (if needed)
@@ -210,8 +217,10 @@ python shared/params.py \
   --project-name myapp \
   --environment-name dev \
   --hosted-zone example.com \
-  --parent-stacks CORE-vpc,CORE-database
+  --parent-stacks CORE-global@us-east-1,CORE-vpc,CORE-database
 ```
+
+**Note:** CORE-global is fetched from us-east-1 (explicit region), while CORE-vpc and CORE-database use the deployment region (us-east-1 in this case).
 
 **Additional params from parent stacks:**
 ```json
@@ -242,6 +251,24 @@ python shared/params.py \
   ...
 }
 ```
+
+### Example 4: Multi-Region Parent Stacks
+```bash
+python shared/params.py \
+  --aws-account-id 123456789012 \
+  --aws-region eu-west-1 \
+  --project-name myapp \
+  --environment-name prod \
+  --hosted-zone example.com \
+  --parent-stacks CORE-global@us-east-1,CORE-vpc,CORE-cdn@us-east-1
+```
+
+**Explanation:**
+- `CORE-global@us-east-1`: Fetches global resources (e.g., ACM certificates) from us-east-1
+- `CORE-vpc`: Fetches VPC resources from eu-west-1 (deployment region)
+- `CORE-cdn@us-east-1`: Fetches CloudFront/CDN resources from us-east-1
+
+This allows fetching global resources from us-east-1 while regional resources come from the deployment region.
 
 ---
 
@@ -304,11 +331,12 @@ Shell script approach (parallel system), uses different mechanism:
 ## Summary
 
 **Key Points:**
-- Parameters cascade from base → discovered → generated → stacks → overrides
+- Parameters cascade from base → discovered → generated → parent stacks → overrides
 - CLI params always win (highest priority)
-- Parent stacks override core stack
+- Parent stacks can specify per-stack regions using `{stack}@{region}` syntax
 - AWS discovery provides infrastructure context
 - All warnings logged, script continues unless critical failure
+- **Breaking Change:** Automatic CORE-global fetching removed - must explicitly specify in `--parent-stacks` if needed
 
 **When to Use Each Tool:**
 - **params.py**: Debug parameter resolution, validate before deploy
