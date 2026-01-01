@@ -1,14 +1,31 @@
+#!/usr/bin/env python3
+"""
+CloudFormation Parameter Resolution Module
+
+This module provides standalone parameter resolution for CloudFormation deployments.
+It can be used both as a CLI tool and as an importable module.
+
+Parameter Resolution Order (later sources override earlier ones):
+1. Base CLI arguments (AccountId, Region, ProjectName, etc.)
+2. AWS infrastructure discovery (VPC, subnets, hosted zones)
+3. Auto-generated values (BuildId from git)
+4. Core global stack outputs (us-east-1)
+5. Parent stack outputs (if specified)
+6. CLI parameter overrides (--param KEY=VALUE) - Highest priority
+"""
+
 import argparse
 import boto3
-import json
 import yaml
-import time
 import subprocess
-import os
-from jinja2 import Environment, FileSystemLoader, select_autoescape
-from render import render_template_string
+import json
+import sys
 
 def general_tag_handler(loader, tag_suffix, node):
+    """
+    YAML tag handler for CloudFormation intrinsic functions.
+    Allows safe_load to handle !Ref, !Sub, etc. without errors.
+    """
     if isinstance(node, yaml.ScalarNode):
         return loader.construct_scalar(node)
     elif isinstance(node, yaml.SequenceNode):
@@ -16,11 +33,25 @@ def general_tag_handler(loader, tag_suffix, node):
     elif isinstance(node, yaml.MappingNode):
         return loader.construct_mapping(node)
     else:
-        return None 
+        return None
 
 yaml.SafeLoader.add_multi_constructor('!', general_tag_handler)
 
+
 def get_vpc_data(aws_region, environment_name):
+    """
+    Fetches VPC data for the specified region and environment.
+    
+    Searches for VPCs in the region. If multiple VPCs are found, uses the first one.
+    Returns VPCId and VPCCidr.
+    
+    Args:
+        aws_region: AWS region to search in
+        environment_name: Environment name (for logging purposes)
+        
+    Returns:
+        dict: {"VPCId": vpc_id, "VPCCidr": vpc_cidr}
+    """
     print(f"Fetching VPC data for region {aws_region} and environment {environment_name}...")
     ec2_client = boto3.client('ec2', region_name=aws_region)
     vpc_id = None
@@ -64,7 +95,26 @@ def get_vpc_data(aws_region, environment_name):
         
     return {"VPCId": vpc_id, "VPCCidr": vpc_cidr}
 
+
 def get_hosted_zone_data(aws_region, hosted_zone_suffix):
+    """
+    Fetches hosted zone data for zones ending with the specified suffix.
+    
+    Searches Route53 for both public and private hosted zones matching the suffix.
+    Returns the first matching zone of each type.
+    
+    Args:
+        aws_region: AWS region (used for client initialization)
+        hosted_zone_suffix: Domain suffix to search for (e.g., "example.com")
+        
+    Returns:
+        dict: {
+            "PublicHostedZoneName": name,
+            "PublicHostedZoneId": id,
+            "PrivateHostedZoneName": name,
+            "PrivateHostedZoneId": id
+        }
+    """
     print(f"Fetching hosted zone data for region {aws_region} with suffix '{hosted_zone_suffix}'...")
     client = boto3.client('route53', region_name=aws_region)
     
@@ -116,7 +166,22 @@ def get_hosted_zone_data(aws_region, hosted_zone_suffix):
     print(f"Retrieved Hosted Zone Info: {hosted_zone_info}")
     return hosted_zone_info
 
+
 def get_subnet_data(aws_region, vpc_id):
+    """
+    Fetches subnet data for the specified VPC.
+    
+    Retrieves all subnets in the VPC and creates a mapping from subnet Name tags
+    to subnet IDs. Subnets without Name tags are skipped.
+    
+    Args:
+        aws_region: AWS region
+        vpc_id: VPC ID to fetch subnets for
+        
+    Returns:
+        dict: {subnet_name: subnet_id, ...}
+        Example: {"public-subnet-1a": "subnet-abc123", "private-subnet-1a": "subnet-def456"}
+    """
     print(f"Fetching subnet data for VPC {vpc_id} in region {aws_region}...")
     ec2_client = boto3.client('ec2', region_name=aws_region)
     subnet_params = {}
@@ -147,109 +212,23 @@ def get_subnet_data(aws_region, vpc_id):
     print(f"Retrieved Subnet Info: {subnet_params}")
     return subnet_params
 
-def deploy_cloudformation(aws_region, stack_name, template_body, cf_parameters):
-    print(f"Starting CloudFormation deployment for stack: {stack_name} in region {aws_region}...")
-    cf_client = boto3.client('cloudformation', region_name=aws_region)
-    action_taken = False 
-    waiter_type = None
-
-    try:
-        stack_description_response = cf_client.describe_stacks(StackName=stack_name)
-        stack_status = stack_description_response['Stacks'][0]['StackStatus']
-        print(f"Stack {stack_name} exists with status: {stack_status}")
-
-        if stack_status == 'ROLLBACK_COMPLETE':
-            print(f"Stack {stack_name} is in ROLLBACK_COMPLETE state. Deleting before recreate...")
-            cf_client.delete_stack(StackName=stack_name)
-            delete_waiter = cf_client.get_waiter('stack_delete_complete')
-            print(f"Waiting for stack {stack_name} deletion to complete...")
-            delete_waiter.wait(StackName=stack_name, WaiterConfig={'Delay': 15, 'MaxAttempts': 40})
-            print(f"Stack {stack_name} deleted successfully. Proceeding to create.")
-            
-            print(f"Attempting to create stack {stack_name} after deletion...")
-            response = cf_client.create_stack(
-                StackName=stack_name,
-                TemplateBody=template_body,
-                Parameters=cf_parameters,
-                Capabilities=['CAPABILITY_IAM', 'CAPABILITY_NAMED_IAM', 'CAPABILITY_AUTO_EXPAND']
-            )
-            print(f"Create initiated for stack {stack_name}. Stack ID: {response.get('StackId')}")
-            waiter_type = 'stack_create_complete'
-            action_taken = True
-        else:
-            print(f"Attempting to update stack {stack_name}...")
-            try:
-                response = cf_client.update_stack(
-                    StackName=stack_name,
-                    TemplateBody=template_body,
-                    Parameters=cf_parameters,
-                    Capabilities=['CAPABILITY_IAM', 'CAPABILITY_NAMED_IAM', 'CAPABILITY_AUTO_EXPAND']
-                )
-                print(f"Update initiated for stack {stack_name}. Stack ID: {response.get('StackId')}")
-                waiter_type = 'stack_update_complete'
-                action_taken = True
-            except cf_client.exceptions.ClientError as e:
-                if "No updates are to be performed" in str(e):
-                    print(f"No updates to be performed on stack {stack_name}.")
-                    return True
-                else:
-                    print(f"Error updating stack {stack_name}: {e}")
-                    raise
-    
-    except cf_client.exceptions.ClientError as e:
-        if "does not exist" in str(e):
-            print(f"Stack {stack_name} does not exist, attempting to create...")
-            try:
-                response = cf_client.create_stack(
-                    StackName=stack_name,
-                    TemplateBody=template_body,
-                    Parameters=cf_parameters,
-                    Capabilities=['CAPABILITY_IAM', 'CAPABILITY_NAMED_IAM', 'CAPABILITY_AUTO_EXPAND']
-                )
-                print(f"Create initiated for stack {stack_name}. Stack ID: {response.get('StackId')}")
-                waiter_type = 'stack_create_complete'
-                action_taken = True
-            except Exception as create_error:
-                print(f"Error creating stack {stack_name}: {create_error}")
-                raise
-        else:
-            print(f"Error during initial describe_stacks for {stack_name}: {e}")
-            raise
-
-    if action_taken and waiter_type:
-        print(f"Waiting for stack {stack_name} operation ({waiter_type}) to complete...")
-    waiter = cf_client.get_waiter(waiter_type)
-    try:
-        waiter.wait(StackName=stack_name, WaiterConfig={'Delay': 30, 'MaxAttempts': 120})
-        print(f"Stack {stack_name} operation completed successfully.")
-        return True
-    except Exception as wait_error:
-        print(f"Error waiting for stack {stack_name} operation: {wait_error}")
-        print(f"Attempting to retrieve all stack events for {stack_name} due to error...")
-        all_events = []
-        try:
-            paginator = cf_client.get_paginator('describe_stack_events')
-            for page in paginator.paginate(StackName=stack_name):
-                all_events.extend(page['StackEvents'])
-            
-            if all_events:
-                all_events.reverse()
-                print("All stack events (chronological order):")
-                for event in all_events:
-                    ts = event.get('Timestamp').strftime('%Y-%m-%d %H:%M:%S')
-                    resource_type = event.get('ResourceType', '')
-                    logical_id = event.get('LogicalResourceId', '')
-                    resource_status = event.get('ResourceStatus', '')
-                    reason = event.get('ResourceStatusReason', '')
-                    reason_str = str(reason).replace('\n', ' ') if reason else ''
-                    print(f"  {ts} - {resource_type} - {logical_id} - {resource_status} - {reason_str}")
-            else:
-                print(f"No stack events found for {stack_name}.")
-        except Exception as event_error:
-            print(f"Could not retrieve all stack events for {stack_name}: {event_error}")
-        raise
 
 def get_stack_outputs(aws_region, project_name, environment_name, base_stack_name):
+    """
+    Retrieves outputs from a CloudFormation stack.
+    
+    Constructs the full stack name as: {PROJECT}-{ENV}-{BASE_STACK_NAME}
+    and fetches all outputs from that stack.
+    
+    Args:
+        aws_region: AWS region where the stack exists
+        project_name: Project name (converted to uppercase)
+        environment_name: Environment name (converted to uppercase)
+        base_stack_name: Base stack name (e.g., "CORE-global", "vpc-setup")
+        
+    Returns:
+        dict: {output_key: output_value, ...}
+    """
     actual_stack_name = f"{project_name.upper()}-{environment_name.upper()}-{base_stack_name}".replace('_', '-')
     
     print(f"Attempting to retrieve outputs for stack: {actual_stack_name} in region {aws_region}...")
@@ -290,18 +269,69 @@ def get_stack_outputs(aws_region, project_name, environment_name, base_stack_nam
     
     return retrieved_outputs
 
-def deploy(aws_account_id, aws_region, aws_cloudformation_file, project_name, deployment_name, deployment_type, environment_name, hosted_zone_suffix, parent_stacks_csv=None, cli_params_list=None):
-    print("Starting CloudFormation deployment process...")
-    print(f"Using AWS Account ID: {aws_account_id}")
-    print(f"Target AWS Region: {aws_region}")
-    print(f"CloudFormation File: {aws_cloudformation_file}")
+
+def resolve_baseline_params(
+    aws_account_id,
+    aws_region,
+    project_name,
+    deployment_name,
+    deployment_type,
+    environment_name,
+    hosted_zone_suffix,
+    parent_stacks_csv=None,
+    cli_params_list=None
+):
+    """
+    Resolves baseline parameters for CloudFormation deployment.
+    
+    This function gathers parameters from multiple sources in the following order,
+    with later sources overriding earlier ones:
+    
+    1. Base CLI arguments
+    2. AWS infrastructure discovery (VPC, subnets, hosted zones)
+    3. Auto-generated values (BuildId from git)
+    4. Core global stack outputs (us-east-1)
+    5. Parent stack outputs (if specified)
+    6. CLI parameter overrides (--param KEY=VALUE) - Highest priority
+    
+    Args:
+        aws_account_id: AWS account ID
+        aws_region: AWS region for deployment
+        project_name: Project name
+        deployment_name: Deployment name
+        deployment_type: Deployment type (e.g., service, job)
+        environment_name: Environment name (e.g., dev, prod)
+        hosted_zone_suffix: Hosted zone suffix to search for (e.g., "example.com")
+        parent_stacks_csv: Comma-separated parent stack base names (optional)
+        cli_params_list: List of 'KEY=VALUE' strings for overrides (optional)
+        
+    Returns:
+        dict: Flat dictionary of resolved parameters
+        
+    Example:
+        params = resolve_baseline_params(
+            aws_account_id="123456789012",
+            aws_region="us-east-1",
+            project_name="myproject",
+            deployment_name="api",
+            deployment_type="service",
+            environment_name="dev",
+            hosted_zone_suffix="example.com",
+            parent_stacks_csv="CORE-vpc,CORE-network",
+            cli_params_list=["BuildId=custom-123", "CustomParam=value"]
+        )
+    """
+    print("Starting parameter resolution process...")
+    print(f"AWS Account ID: {aws_account_id}")
+    print(f"AWS Region: {aws_region}")
     print(f"Project Name: {project_name}")
     print(f"Deployment Name: {deployment_name}")
     print(f"Deployment Type: {deployment_type}")
     print(f"Environment Name: {environment_name}")
     print(f"Hosted Zone Suffix: {hosted_zone_suffix}")
 
-    print("Gathering initial parameters...")
+    # 1. Initialize base parameters from CLI arguments
+    print("\n=== Phase 1: Base Parameters from CLI Arguments ===")
     params = {
         "AccountId": aws_account_id,
         "Region": aws_region,
@@ -310,13 +340,20 @@ def deploy(aws_account_id, aws_region, aws_cloudformation_file, project_name, de
         "EnvironmentNameLower": environment_name.lower(),
         "EnvironmentNameUpper": environment_name.upper()
     }
+    print(f"Base parameters: {params}")
 
+    # 2. AWS infrastructure discovery
+    print("\n=== Phase 2: AWS Infrastructure Discovery ===")
+    
+    # VPC data
     vpc_data = get_vpc_data(aws_region, environment_name)
     params.update(vpc_data)
 
+    # Hosted zone data
     hosted_zone_data = get_hosted_zone_data(aws_region, hosted_zone_suffix)
     params.update(hosted_zone_data)
     
+    # Subnet data
     vpc_id_for_subnets = params.get("VPCId")
     if vpc_id_for_subnets:
         subnet_data = get_subnet_data(aws_region, vpc_id_for_subnets)
@@ -324,6 +361,20 @@ def deploy(aws_account_id, aws_region, aws_cloudformation_file, project_name, de
     else:
         print("Warning: VPCId not found in params, skipping subnet data retrieval.")
 
+    # 3. Auto-generated values (BuildId from git)
+    print("\n=== Phase 3: Auto-generated Values ===")
+    if "BuildId" not in params:
+        try:
+            git_hash = subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD']).decode('utf-8').strip()
+            params["BuildId"] = git_hash
+            print(f"Added BuildId from git: {git_hash}")
+        except subprocess.CalledProcessError as e:
+            print(f"Warning: Could not determine git revision for BuildId: {e}. BuildId will not be set automatically.")
+        except FileNotFoundError:
+            print("Warning: git command not found. BuildId will not be set automatically.")
+
+    # 4. Core global stack outputs
+    print("\n=== Phase 4: Core Global Stack Outputs (us-east-1) ===")
     core_global_base_stack_name = "CORE-global"
     print(f"Retrieving outputs from global/core stack '{project_name.upper()}-{environment_name.upper()}-{core_global_base_stack_name}' in us-east-1...")
     core_global_outputs = get_stack_outputs("us-east-1", project_name, environment_name, core_global_base_stack_name)
@@ -331,6 +382,8 @@ def deploy(aws_account_id, aws_region, aws_cloudformation_file, project_name, de
     print(f"Outputs from {full_core_stack_name} stack: {core_global_outputs}")
     params.update(core_global_outputs)
 
+    # 5. Parent stack outputs
+    print("\n=== Phase 5: Parent Stack Outputs ===")
     if parent_stacks_csv:
         parent_stack_base_names = [name.strip() for name in parent_stacks_csv.split(',') if name.strip()]
         if parent_stack_base_names:
@@ -346,150 +399,118 @@ def deploy(aws_account_id, aws_region, aws_cloudformation_file, project_name, de
                     print(f"No outputs found or retrieved for parent stack {full_parent_stack_name}.")
         else:
             print("No valid parent stack names found in --parent-stacks input.")
+    else:
+        print("No parent stacks specified.")
 
-    if "BuildId" not in params:
-        try:
-            git_hash = subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD']).decode('utf-8').strip()
-            params["BuildId"] = git_hash
-            print(f"Added BuildId from git: {git_hash}")
-        except subprocess.CalledProcessError as e:
-            print(f"Warning: Could not determine git revision for BuildId: {e}. BuildId will not be set automatically.")
-        except FileNotFoundError:
-            print("Warning: git command not found. BuildId will not be set automatically.")
-
-
-
-    ssm_client = boto3.client('ssm', region_name=aws_region)
-    param_store_key = f"/deploy/{params['EnvironmentNameLower']}/params.json"
-    print(f"Checking for parameters in SSM Parameter Store at key: {param_store_key}")
-    try:
-        response = ssm_client.get_parameter(Name=param_store_key, WithDecryption=True)
-        param_value = response['Parameter']['Value']
-        print("Found parameters in SSM Parameter Store. Merging them.")
-        ssm_params = json.loads(param_value)
-        params.update(ssm_params)
-        print(f"Merged parameters from SSM: {ssm_params}")
-    except ssm_client.exceptions.ParameterNotFound:
-        print(f"No parameters found in SSM Parameter Store at {param_store_key}. Skipping.")
-    except Exception as e:
-        print(f"Error fetching or parsing parameters from SSM Parameter Store: {e}")
-
-    cli_param_dict_parsed = {}
+    # 6. CLI parameter overrides
+    print("\n=== Phase 6: CLI Parameter Overrides ===")
     if cli_params_list:
         print(f"Processing CLI parameters from --param to update gathered params: {cli_params_list}")
         for p_str in cli_params_list:
             if '=' in p_str:
                 key, value = p_str.split('=', 1)
                 if key in params:
-                    print(f"Overriding gathered parameter '{key}' with value from --param: '{value}' (was: '{params.get(key)}')")
+                    print(f"Overriding parameter '{key}' with value from --param: '{value}' (was: '{params.get(key)}')")
                 else:
                     print(f"Adding new parameter from --param: '{key}' = '{value}'")
                 params[key] = value
-                cli_param_dict_parsed[key] = value
             else:
                 print(f"Warning: CLI parameter '{p_str}' from --param is not in KEY=VALUE format and will be ignored.")
+    else:
+        print("No CLI parameter overrides provided.")
 
-    print(f"Reading and parsing CloudFormation template: {aws_cloudformation_file}...")
-    try:
-        with open(aws_cloudformation_file, 'r') as f:
-            template_body = f.read()
-        
-        cf_template = yaml.safe_load(template_body)
-    except FileNotFoundError:
-        print(f"Error: CloudFormation template file not found at {aws_cloudformation_file}")
-        raise
-    except yaml.YAMLError as e:
-        print(f"Error: Could not parse CloudFormation template file {aws_cloudformation_file}: {e}")
-        raise
-    except Exception as e:
-        print(f"An unexpected error occurred while reading/parsing {aws_cloudformation_file}: {e}")
-        raise
-
-    print(f"Rendering CloudFormation template '{aws_cloudformation_file}' using Jinja2...")
-    try:
-        rendered_template_body = render_template_string(template_body, params)
-        template_body = rendered_template_body
-        print("Jinja2 rendering complete.")
-
-        print("Re-parsing template after Jinja2 rendering to update parameter definitions...")
-        cf_template = yaml.safe_load(template_body)
-    except Exception as e:
-        print(f"Error during Jinja2 rendering or re-parsing of template {aws_cloudformation_file}: {e}")
-        raise
-
-    print("Resolving parameters for CloudFormation deployment...")
-    template_parameters = cf_template.get('Parameters', {})
-    cf_deploy_params = []
-    for param_key, param_details in template_parameters.items():
-        if param_key in params:
-            param_value = str(params[param_key])
-            cf_deploy_params.append({
-                'ParameterKey': param_key,
-                'ParameterValue': param_value
-            })
-
-            if param_details.get('NoEcho'):
-                print(f"    {param_key}: ****")
-            else:
-                print(f"    {param_key}: {param_value}")
-        else:
-            if 'Default' not in param_details:
-                print(f"    {param_key}: <<< MISSING")
-            else:
-                print(f"    {param_key}: {param_details['Default']} (default)")
-
-    print("Constructing CloudFormation stack name...")
-    stack_name_parts = [
-        project_name.upper(),
-        environment_name.upper(),
-        deployment_type,
-        deployment_name
-    ]
-    stack_name = "-".join(stack_name_parts).replace('_', '-')
-    print(f"CloudFormation stack name determined: {stack_name}")
-
-
-    print(f"Final resolved parameters for CloudFormation deployment of stack '{stack_name}': {cf_deploy_params}")
-
-    deploy_cloudformation(aws_region, stack_name, template_body, cf_deploy_params)
-    print(f"CloudFormation deployment for stack '{stack_name}' completed (or no updates were needed).")
-
-    print(f"Retrieving outputs from deployed stack '{stack_name}'...")
-    deployed_base_stack_name_parts = [
-        deployment_type,
-        deployment_name
-    ]
-    deployed_base_stack_name = "-".join(deployed_base_stack_name_parts).replace('_', '-')
+    print("\n=== Parameter Resolution Complete ===")
+    print(f"Total parameters resolved: {len(params)}")
     
-    deployed_stack_outputs = get_stack_outputs(aws_region, project_name, environment_name, deployed_base_stack_name)
-    print(f"Outputs from deployed stack '{stack_name}': {deployed_stack_outputs}")
-    params.update(deployed_stack_outputs)
-    print(f"Final parameters after merging outputs from deployed stack '{stack_name}': {params}")
-    
+    return params
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Deploy AWS CloudFormation stacks.")
+
+def main():
+    """
+    CLI interface for parameter resolution.
+    
+    Provides JSON and text output formats for resolved parameters.
+    """
+    parser = argparse.ArgumentParser(
+        description="Resolve CloudFormation deployment parameters",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # JSON output (default)
+  python scripts/params.py \\
+    --aws-account-id 123456789012 \\
+    --aws-region us-east-1 \\
+    --project-name myproject \\
+    --deployment-name myapp \\
+    --deployment-type service \\
+    --environment-name dev \\
+    --hosted-zone example.com
+
+  # Text output for shell scripts
+  python scripts/params.py \\
+    --aws-account-id 123456789012 \\
+    --aws-region us-east-1 \\
+    --project-name myproject \\
+    --deployment-name myapp \\
+    --deployment-type service \\
+    --environment-name dev \\
+    --hosted-zone example.com \\
+    --output text
+
+  # With parent stacks and overrides
+  python scripts/params.py \\
+    --aws-account-id 123456789012 \\
+    --aws-region us-east-1 \\
+    --project-name myproject \\
+    --deployment-name myapp \\
+    --deployment-type service \\
+    --environment-name dev \\
+    --hosted-zone example.com \\
+    --parent-stacks CORE-vpc,CORE-network \\
+    --param BuildId=custom-123 \\
+    --param CustomParam=value
+        """
+    )
     
     parser.add_argument("--aws-account-id", required=True, help="Your AWS Account ID.")
     parser.add_argument("--aws-region", required=True, help="The AWS region for deployment (e.g., us-east-1).")
-    parser.add_argument("--aws-cloudformation-file", required=True, help="Path to the CloudFormation template file.")
     parser.add_argument("--project-name", required=True, help="The name of the project.")
     parser.add_argument("--deployment-name", required=True, help="The name of the deployment.")
     parser.add_argument("--deployment-type", required=True, help="The type of the deployment (e.g., service, job).")
     parser.add_argument("--environment-name", required=True, help="The name of the environment (e.g., dev, staging, prod).")
     parser.add_argument("--hosted-zone", required=True, help="The suffix of the hosted zone to search for (e.g., mycompany.com).")
-    parser.add_argument("--parent-stacks", required=False, help="Comma-separated list of parent stack base names to fetch outputs from (e.g., 'stack1-base,stack2-base').")
-    parser.add_argument("--param", action='append', default=[], help="Additional parameters to pass directly to CloudFormation in 'KEY=VALUE' format. Can be specified multiple times. These override other gathered parameters if keys conflict.")
+    parser.add_argument("--parent-stacks", required=False, help="Comma-separated list of parent stack base names to fetch outputs from (e.g., 'CORE-vpc,CORE-network').")
+    parser.add_argument("--param", action='append', default=[], help="Additional parameters in 'KEY=VALUE' format. Can be specified multiple times. These override other gathered parameters if keys conflict.")
+    parser.add_argument("--output", choices=["json", "text"], default="json", help="Output format (default: json)")
     
     args = parser.parse_args()
     
-    deploy(args.aws_account_id, 
-           args.aws_region, 
-           args.aws_cloudformation_file, 
-           args.project_name, 
-           args.deployment_name, 
-           args.deployment_type, 
-           args.environment_name, 
-           args.hosted_zone,
-           args.parent_stacks,
-           args.param)
+    try:
+        params = resolve_baseline_params(
+            aws_account_id=args.aws_account_id,
+            aws_region=args.aws_region,
+            project_name=args.project_name,
+            deployment_name=args.deployment_name,
+            deployment_type=args.deployment_type,
+            environment_name=args.environment_name,
+            hosted_zone_suffix=args.hosted_zone,
+            parent_stacks_csv=args.parent_stacks,
+            cli_params_list=args.param if args.param else None
+        )
+        
+        print("\n=== Output ===")
+        if args.output == "json":
+            print(json.dumps(params, indent=2))
+        else:  # text
+            for key, value in sorted(params.items()):
+                print(f"{key}={value}")
+        
+        return 0
+        
+    except Exception as e:
+        print(f"\nError: {e}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

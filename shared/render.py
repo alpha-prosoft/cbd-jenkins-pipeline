@@ -1,9 +1,37 @@
-from jinja2 import Environment, FileSystemLoader, select_autoescape
+from jinja2 import Environment, FileSystemLoader, BaseLoader, select_autoescape
 import os
 import json
 import argparse
 import boto3
-from deploy import get_stack_outputs # Assuming deploy.py is in the same directory or python path
+
+
+def render_template_string(template_string, params_dict, context_key='params'):
+    """
+    Renders a Jinja2 template string with parameters.
+    
+    This is a reusable function for rendering templates from strings rather than files.
+    It's used by deploy.py to render CloudFormation templates with resolved parameters.
+    
+    Args:
+        template_string: The template content as string
+        params_dict: Dictionary of parameters for rendering
+        context_key: Key name for params in template context (default: 'params')
+        
+    Returns:
+        str: Rendered template string
+        
+    Example:
+        template = "Hello {{ params.name }}, your ID is {{ params.id }}"
+        rendered = render_template_string(template, {"name": "World", "id": "123"})
+        # Returns: "Hello World, your ID is 123"
+    """
+    env = Environment(
+        loader=BaseLoader(),
+        autoescape=select_autoescape(['html', 'xml', 'yaml', 'json']),
+    )
+    template = env.from_string(template_string)
+    return template.render({context_key: params_dict})
+
 
 def parse_params(param_list):
     """Converts a list of 'key=value' strings into a dictionary."""
@@ -23,6 +51,9 @@ def get_initial_web_config_from_stacks(aws_region, project_name, environment_nam
     Filters outputs based on stack_params_whitelist_csv if provided.
     Stack names are constructed as: {PROJECT_NAME.upper()}-{ENVIRONMENT_NAME.upper()}-{base_stack_name}
     """
+    # Import here to avoid circular import
+    from deploy import get_stack_outputs
+    
     initial_web_config = {}
     if not all([aws_region, project_name, environment_name]):
         print("Warning: AWS region, project name, or environment name not provided. Cannot fetch stack outputs.")
