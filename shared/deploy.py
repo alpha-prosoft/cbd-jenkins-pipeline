@@ -309,7 +309,7 @@ def get_stack_outputs(stack_region, project_name, environment_name, base_stack_n
     
     return retrieved_outputs
 
-def deploy(aws_account_id, aws_region, aws_cloudformation_file, deployment_name, deployment_type, environment_name, hosted_zone_suffix, project_name=None, parent_stacks_csv=None, cli_params_list=None):
+def deploy(aws_account_id, aws_region, aws_cloudformation_file, deployment_name, deployment_type, environment_name, hosted_zone_suffix, project_name=None, build_id=None, parent_stacks_csv=None, cli_params_list=None):
     print("Starting CloudFormation deployment process...")
     print(f"Using AWS Account ID: {aws_account_id}")
     print(f"Target AWS Region: {aws_region}")
@@ -319,6 +319,8 @@ def deploy(aws_account_id, aws_region, aws_cloudformation_file, deployment_name,
     print(f"Deployment Type: {deployment_type}")
     print(f"Environment Name: {environment_name}")
     print(f"Hosted Zone Suffix: {hosted_zone_suffix}")
+    if build_id:
+        print(f"Build ID: {build_id}")
 
     print("Gathering initial parameters...")
     params = {
@@ -330,6 +332,9 @@ def deploy(aws_account_id, aws_region, aws_cloudformation_file, deployment_name,
     }
     if project_name:
         params["ProjectName"] = project_name
+    if build_id:
+        params["BuildId"] = build_id
+        print(f"Using provided BuildId: {build_id}")
 
     vpc_data = get_vpc_data(aws_region, environment_name)
     params.update(vpc_data)
@@ -510,6 +515,7 @@ if __name__ == "__main__":
     parser.add_argument("--deployment-type", required=True, help="The type of the deployment (e.g., service, job).")
     parser.add_argument("--environment-name", required=True, help="The name of the environment (e.g., dev, staging, prod).")
     parser.add_argument("--hosted-zone", required=True, help="The suffix of the hosted zone to search for (e.g., mycompany.com).")
+    parser.add_argument("--build-id", required=False, help="Build ID to use for deployment (optional). If not provided, will be auto-generated from git commit hash.")
     parser.add_argument("--parent-stacks", required=False, help="Comma-separated parent stack names with optional region (e.g., 'CORE-global@us-east-1,CORE-vpc,CORE-network@eu-west-1'). Region defaults to --region if not specified.")
     parser.add_argument("--param", action='append', default=[], help="Additional parameters to pass directly to CloudFormation in 'KEY=VALUE' format. Can be specified multiple times. These override other gathered parameters if keys conflict.")
     
@@ -523,5 +529,6 @@ if __name__ == "__main__":
            args.environment_name,
            args.hosted_zone,
            args.project_name,
+           args.build_id,
            args.parent_stacks,
            args.param)
