@@ -8,9 +8,21 @@ This document describes how parameters are resolved for CloudFormation deploymen
 ### params.py
 Standalone parameter resolver that gathers baseline parameters without deploying.
 
+**Output Formats:**
+- `pretty` (default): Structured display with categories and missing parameter detection
+- `json`: JSON format for programmatic use
+- `text`: KEY=VALUE pairs for shell scripts
+
 **Usage as CLI:**
 ```bash
+# Pretty formatted output (default)
 python shared/params.py --aws-account-id 123 --aws-region us-east-1 ...
+
+# JSON output for scripting
+python shared/params.py --aws-account-id 123 --aws-region us-east-1 ... --output json
+
+# Quiet mode (suppress progress messages)
+python shared/params.py --aws-account-id 123 --aws-region us-east-1 ... --quiet
 ```
 
 **Usage as module:**
@@ -78,7 +90,7 @@ graph LR
 
 | Source | Examples | When Applied | Can Override |
 |--------|----------|--------------|--------------|
-| **CLI Arguments** | `AccountId`, `Region`, `ProjectName`, `DeploymentName`, `DeploymentType`, `EnvironmentName` | Always (required) | No (base values) |
+| **CLI Arguments** | `AccountId`, `Region`, `ProjectName`, `EnvironmentName` | Always (required) | No (base values) |
 | **AWS Discovery** | `VPCId`, `VPCCidr`, Subnet IDs by name, `PrivateHostedZoneId`, `PublicHostedZoneId` | When AWS resources exist | No |
 | **Auto-generated** | `BuildId` (from git hash) | If not already in params | AWS Discovery |
 | **Core Stack** | Global stack outputs (e.g., ACM certificates, shared resources) | If stack exists in us-east-1 | Auto-generated |
@@ -166,8 +178,6 @@ python shared/params.py \
   --aws-account-id 123456789012 \
   --aws-region us-east-1 \
   --project-name myapp \
-  --deployment-name api \
-  --deployment-type service \
   --environment-name dev \
   --hosted-zone example.com
 ```
@@ -178,7 +188,6 @@ python shared/params.py \
   "AccountId": "123456789012",
   "Region": "us-east-1",
   "ProjectName": "myapp",
-  "DeploymentName": "api",
   "EnvironmentNameLower": "dev",
   "EnvironmentNameUpper": "DEV",
   "VPCId": "vpc-abc123",
@@ -199,8 +208,6 @@ python shared/params.py \
   --aws-account-id 123456789012 \
   --aws-region us-east-1 \
   --project-name myapp \
-  --deployment-name api \
-  --deployment-type service \
   --environment-name dev \
   --hosted-zone example.com \
   --parent-stacks CORE-vpc,CORE-database
@@ -221,8 +228,6 @@ python shared/params.py \
   --aws-account-id 123456789012 \
   --aws-region us-east-1 \
   --project-name myapp \
-  --deployment-name api \
-  --deployment-type service \
   --environment-name dev \
   --hosted-zone example.com \
   --param BuildId=custom-build-123 \

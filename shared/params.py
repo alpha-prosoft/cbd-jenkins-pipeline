@@ -12,6 +12,14 @@ Parameter Resolution Order (later sources override earlier ones):
 4. Core global stack outputs (us-east-1)
 5. Parent stack outputs (if specified)
 6. CLI parameter overrides (--param KEY=VALUE) - Highest priority
+
+Output Formats:
+- pretty: Structured display with categories and missing parameter detection (default)
+- json: JSON format for programmatic use
+- text: KEY=VALUE pairs for shell scripts
+
+Options:
+- --quiet: Suppress progress messages, only show final output
 """
 
 import argparse
@@ -270,12 +278,110 @@ def get_stack_outputs(aws_region, project_name, environment_name, base_stack_nam
     return retrieved_outputs
 
 
+def format_params_pretty(params):
+    """
+    Formats parameters in a structured, easy-to-read format.
+    Groups parameters by category and highlights missing values.
+    
+    Args:
+        params: Dictionary of resolved parameters
+        
+    Returns:
+        str: Formatted parameter output
+    """
+    output_lines = []
+    output_lines.append("\n" + "=" * 80)
+    output_lines.append("RESOLVED PARAMETERS")
+    output_lines.append("=" * 80)
+    
+    # Get metadata if available, otherwise use empty dict
+    metadata = params.get('_metadata', {})
+    
+    # Define categories with display names
+    categories = {
+        'base': 'Base Parameters',
+        'vpc': 'VPC & Network',
+        'hosted_zones': 'Route53 Hosted Zones',
+        'build': 'Build Information',
+        'subnets': 'Subnets',
+        'core_stack': 'Core Stack Outputs',
+        'parent_stacks': 'Parent Stack Outputs',
+        'overrides': 'CLI Overrides'
+    }
+    
+    # Track which params have been displayed
+    displayed_params = set(['_metadata'])
+    
+    # Display categorized parameters
+    for category_key, category_name in categories.items():
+        category_params = metadata.get(category_key, [])
+        
+        if category_key == 'subnets':
+            # Special handling for subnets (any param containing 'subnet')
+            category_params = [k for k in params.keys() if 'subnet' in k.lower() and k != '_metadata']
+        elif category_key in ['core_stack', 'parent_stacks', 'overrides']:
+            # These are tracked separately, skip for now
+            continue
+        
+        if category_params:
+            output_lines.append(f"\n{category_name}:")
+            output_lines.append("-" * 40)
+            
+            for param_key in category_params:
+                displayed_params.add(param_key)
+                value = params.get(param_key)
+                
+                if value is None or value == '':
+                    output_lines.append(f"  {param_key:35} = <MISSING>")
+                else:
+                    output_lines.append(f"  {param_key:35} = {value}")
+    
+    # Display subnet parameters if any
+    subnet_params = {k: v for k, v in params.items() if 'subnet' in k.lower() and k not in displayed_params}
+    if subnet_params:
+        output_lines.append(f"\nSubnets:")
+        output_lines.append("-" * 40)
+        for param_key in sorted(subnet_params.keys()):
+            displayed_params.add(param_key)
+            value = subnet_params[param_key]
+            if value is None or value == '':
+                output_lines.append(f"  {param_key:35} = <MISSING>")
+            else:
+                output_lines.append(f"  {param_key:35} = {value}")
+    
+    # Display any remaining parameters (from stacks or overrides)
+    remaining_params = {k: v for k, v in params.items() if k not in displayed_params}
+    if remaining_params:
+        output_lines.append(f"\nAdditional Parameters (Stack Outputs & Overrides):")
+        output_lines.append("-" * 40)
+        for param_key in sorted(remaining_params.keys()):
+            value = remaining_params[param_key]
+            if value is None or value == '':
+                output_lines.append(f"  {param_key:35} = <MISSING>")
+            else:
+                output_lines.append(f"  {param_key:35} = {value}")
+    
+    # Summary of missing parameters
+    missing_params = [k for k, v in params.items() if (v is None or v == '') and k != '_metadata']
+    if missing_params:
+        output_lines.append(f"\n" + "!" * 80)
+        output_lines.append(f"WARNING: {len(missing_params)} parameter(s) missing:")
+        output_lines.append("!" * 80)
+        for param in missing_params:
+            output_lines.append(f"  - {param}")
+    
+    output_lines.append("\n" + "=" * 80)
+    output_lines.append(f"Total Parameters: {len(params) - 1}")  # -1 for _metadata
+    output_lines.append(f"Missing Parameters: {len(missing_params)}")
+    output_lines.append("=" * 80 + "\n")
+    
+    return "\n".join(output_lines)
+
+
 def resolve_baseline_params(
     aws_account_id,
     aws_region,
     project_name,
-    deployment_name,
-    deployment_type,
     environment_name,
     hosted_zone_suffix,
     parent_stacks_csv=None,
@@ -298,8 +404,6 @@ def resolve_baseline_params(
         aws_account_id: AWS account ID
         aws_region: AWS region for deployment
         project_name: Project name
-        deployment_name: Deployment name
-        deployment_type: Deployment type (e.g., service, job)
         environment_name: Environment name (e.g., dev, prod)
         hosted_zone_suffix: Hosted zone suffix to search for (e.g., "example.com")
         parent_stacks_csv: Comma-separated parent stack base names (optional)
@@ -313,8 +417,6 @@ def resolve_baseline_params(
             aws_account_id="123456789012",
             aws_region="us-east-1",
             project_name="myproject",
-            deployment_name="api",
-            deployment_type="service",
             environment_name="dev",
             hosted_zone_suffix="example.com",
             parent_stacks_csv="CORE-vpc,CORE-network",
@@ -325,8 +427,6 @@ def resolve_baseline_params(
     print(f"AWS Account ID: {aws_account_id}")
     print(f"AWS Region: {aws_region}")
     print(f"Project Name: {project_name}")
-    print(f"Deployment Name: {deployment_name}")
-    print(f"Deployment Type: {deployment_type}")
     print(f"Environment Name: {environment_name}")
     print(f"Hosted Zone Suffix: {hosted_zone_suffix}")
 
@@ -336,7 +436,6 @@ def resolve_baseline_params(
         "AccountId": aws_account_id,
         "Region": aws_region,
         "ProjectName": project_name,
-        "DeploymentName": deployment_name,
         "EnvironmentNameLower": environment_name.lower(),
         "EnvironmentNameUpper": environment_name.upper()
     }
@@ -422,6 +521,17 @@ def resolve_baseline_params(
     print("\n=== Parameter Resolution Complete ===")
     print(f"Total parameters resolved: {len(params)}")
     
+    # Track parameter categories for better organization
+    param_metadata = {
+        'base': ['AccountId', 'Region', 'ProjectName', 'EnvironmentNameLower', 'EnvironmentNameUpper'],
+        'vpc': ['VPCId', 'VPCCidr'],
+        'hosted_zones': ['PublicHostedZoneName', 'PublicHostedZoneId', 'PrivateHostedZoneName', 'PrivateHostedZoneId'],
+        'build': ['BuildId']
+    }
+    
+    # Store metadata in params for display purposes
+    params['_metadata'] = param_metadata
+    
     return params
 
 
@@ -432,27 +542,33 @@ def main():
     Provides JSON and text output formats for resolved parameters.
     """
     parser = argparse.ArgumentParser(
-        description="Resolve CloudFormation deployment parameters",
+        prog='params.py',
+        description='Resolve CloudFormation deployment parameters from AWS infrastructure and stack outputs',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # JSON output (default)
+  # Pretty output with categories (default)
   python scripts/params.py \\
     --aws-account-id 123456789012 \\
     --aws-region us-east-1 \\
     --project-name myproject \\
-    --deployment-name myapp \\
-    --deployment-type service \\
     --environment-name dev \\
     --hosted-zone example.com
+
+  # JSON output for programmatic use
+  python scripts/params.py \\
+    --aws-account-id 123456789012 \\
+    --aws-region us-east-1 \\
+    --project-name myproject \\
+    --environment-name dev \\
+    --hosted-zone example.com \\
+    --output json
 
   # Text output for shell scripts
   python scripts/params.py \\
     --aws-account-id 123456789012 \\
     --aws-region us-east-1 \\
     --project-name myproject \\
-    --deployment-name myapp \\
-    --deployment-type service \\
     --environment-name dev \\
     --hosted-zone example.com \\
     --output text
@@ -462,52 +578,121 @@ Examples:
     --aws-account-id 123456789012 \\
     --aws-region us-east-1 \\
     --project-name myproject \\
-    --deployment-name myapp \\
-    --deployment-type service \\
     --environment-name dev \\
     --hosted-zone example.com \\
     --parent-stacks CORE-vpc,CORE-network \\
     --param BuildId=custom-123 \\
     --param CustomParam=value
+
+  # Quiet mode (suppress progress messages)
+  python scripts/params.py \\
+    --aws-account-id 123456789012 \\
+    --aws-region us-east-1 \\
+    --project-name myproject \\
+    --environment-name dev \\
+    --hosted-zone example.com \\
+    --output json \\
+    --quiet
         """
     )
     
-    parser.add_argument("--aws-account-id", required=True, help="Your AWS Account ID.")
-    parser.add_argument("--aws-region", required=True, help="The AWS region for deployment (e.g., us-east-1).")
-    parser.add_argument("--project-name", required=True, help="The name of the project.")
-    parser.add_argument("--deployment-name", required=True, help="The name of the deployment.")
-    parser.add_argument("--deployment-type", required=True, help="The type of the deployment (e.g., service, job).")
-    parser.add_argument("--environment-name", required=True, help="The name of the environment (e.g., dev, staging, prod).")
-    parser.add_argument("--hosted-zone", required=True, help="The suffix of the hosted zone to search for (e.g., mycompany.com).")
-    parser.add_argument("--parent-stacks", required=False, help="Comma-separated list of parent stack base names to fetch outputs from (e.g., 'CORE-vpc,CORE-network').")
-    parser.add_argument("--param", action='append', default=[], help="Additional parameters in 'KEY=VALUE' format. Can be specified multiple times. These override other gathered parameters if keys conflict.")
-    parser.add_argument("--output", choices=["json", "text"], default="json", help="Output format (default: json)")
+    parser.add_argument("--aws-account-id", 
+                        required=True, 
+                        metavar='ACCOUNT_ID',
+                        help="AWS Account ID")
+    parser.add_argument("--aws-region", 
+                        required=True,
+                        metavar='REGION',
+                        help="AWS region (e.g., us-east-1)")
+    parser.add_argument("--project-name", 
+                        required=True,
+                        metavar='PROJECT',
+                        help="Project name")
+    parser.add_argument("--environment-name", 
+                        required=True,
+                        metavar='ENVIRONMENT',
+                        help="Environment name (e.g., dev, staging, prod)")
+    parser.add_argument("--hosted-zone", 
+                        required=True,
+                        metavar='ZONE',
+                        help="Hosted zone suffix (e.g., example.com)")
+    parser.add_argument("--parent-stacks",
+                        metavar='STACKS',
+                        help="Comma-separated parent stack names (e.g., 'CORE-vpc,CORE-network')")
+    parser.add_argument("--param", 
+                        action='append', 
+                        default=[],
+                        metavar='KEY=VALUE',
+                        help="Additional parameters (can be specified multiple times)")
+    parser.add_argument("--output", 
+                        choices=["json", "text", "pretty"], 
+                        default="pretty",
+                        metavar='FORMAT',
+                        help="Output format: json, text, or pretty (default: pretty)")
+    parser.add_argument("--quiet", 
+                        action='store_true',
+                        help="Suppress progress messages (auto-enabled for JSON output)")
     
     args = parser.parse_args()
+    
+    # Auto-enable quiet mode for JSON output
+    if args.output == 'json':
+        args.quiet = True
+    
+    # Redirect print statements if quiet mode
+    original_print = print
+    if args.quiet:
+        import io
+        import contextlib
+        print_buffer = io.StringIO()
+        def quiet_print(*args_inner, **kwargs):
+            # Only suppress stdout, keep stderr
+            if kwargs.get('file') == sys.stderr:
+                original_print(*args_inner, **kwargs)
+            else:
+                original_print(*args_inner, **kwargs, file=print_buffer)
+        # Temporarily replace print
+        import builtins
+        builtins.print = quiet_print
     
     try:
         params = resolve_baseline_params(
             aws_account_id=args.aws_account_id,
             aws_region=args.aws_region,
             project_name=args.project_name,
-            deployment_name=args.deployment_name,
-            deployment_type=args.deployment_type,
             environment_name=args.environment_name,
             hosted_zone_suffix=args.hosted_zone,
             parent_stacks_csv=args.parent_stacks,
             cli_params_list=args.param if args.param else None
         )
         
-        print("\n=== Output ===")
+        # Restore original print if quiet mode
+        if args.quiet:
+            import builtins
+            builtins.print = original_print
+        
+        # Output results
         if args.output == "json":
-            print(json.dumps(params, indent=2))
-        else:  # text
+            # JSON output: silent, no headers, just pure JSON
+            output_params = {k: v for k, v in params.items() if k != '_metadata'}
+            print(json.dumps(output_params, indent=2))
+        elif args.output == "text":
+            # Text output: no header for easy parsing
             for key, value in sorted(params.items()):
-                print(f"{key}={value}")
+                if key != '_metadata':
+                    print(f"{key}={value}")
+        else:  # pretty
+            # Pretty output: with header
+            print("\n=== RESOLVED PARAMETERS ===")
+            print(format_params_pretty(params))
         
         return 0
         
     except Exception as e:
+        # Restore original print if quiet mode
+        if args.quiet:
+            import builtins
+            builtins.print = original_print
         print(f"\nError: {e}", file=sys.stderr)
         return 1
 
