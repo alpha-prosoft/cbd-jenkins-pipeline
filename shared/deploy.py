@@ -249,11 +249,30 @@ def deploy_cloudformation(aws_region, stack_name, template_body, cf_parameters):
             print(f"Could not retrieve all stack events for {stack_name}: {event_error}")
         raise
 
-def get_stack_outputs(aws_region, project_name, environment_name, base_stack_name):
-    actual_stack_name = f"{project_name.upper()}-{environment_name.upper()}-{base_stack_name}".replace('_', '-')
+def get_stack_outputs(stack_region, project_name, environment_name, base_stack_name):
+    """
+    Retrieves outputs from a CloudFormation stack.
     
-    print(f"Attempting to retrieve outputs for stack: {actual_stack_name} in region {aws_region}...")
-    cf_client = boto3.client('cloudformation', region_name=aws_region)
+    Constructs the full stack name as: {PROJECT}-{ENV}-{BASE_STACK_NAME} (if project_name provided)
+    or {ENV}-{BASE_STACK_NAME} (if project_name is None)
+    and fetches all outputs from that stack.
+    
+    Args:
+        stack_region: AWS region where the stack exists (per-stack)
+        project_name: Project name (converted to uppercase), optional - if None, omitted from stack name
+        environment_name: Environment name (converted to uppercase)
+        base_stack_name: Base stack name (e.g., "CORE-global", "vpc-setup")
+        
+    Returns:
+        dict: {output_key: output_value, ...}
+    """
+    if project_name:
+        actual_stack_name = f"{project_name.upper()}-{environment_name.upper()}-{base_stack_name}".replace('_', '-')
+    else:
+        actual_stack_name = f"{environment_name.upper()}-{base_stack_name}".replace('_', '-')
+    
+    print(f"Attempting to retrieve outputs for stack: {actual_stack_name} in region {stack_region}...")
+    cf_client = boto3.client('cloudformation', region_name=stack_region)
     retrieved_outputs = {}
 
     try:
@@ -290,12 +309,12 @@ def get_stack_outputs(aws_region, project_name, environment_name, base_stack_nam
     
     return retrieved_outputs
 
-def deploy(aws_account_id, aws_region, aws_cloudformation_file, project_name, deployment_name, deployment_type, environment_name, hosted_zone_suffix, parent_stacks_csv=None, cli_params_list=None):
+def deploy(aws_account_id, aws_region, aws_cloudformation_file, deployment_name, deployment_type, environment_name, hosted_zone_suffix, project_name=None, parent_stacks_csv=None, cli_params_list=None):
     print("Starting CloudFormation deployment process...")
     print(f"Using AWS Account ID: {aws_account_id}")
     print(f"Target AWS Region: {aws_region}")
     print(f"CloudFormation File: {aws_cloudformation_file}")
-    print(f"Project Name: {project_name}")
+    print(f"Project Name: {project_name if project_name else '(not specified)'}")
     print(f"Deployment Name: {deployment_name}")
     print(f"Deployment Type: {deployment_type}")
     print(f"Environment Name: {environment_name}")
@@ -305,11 +324,12 @@ def deploy(aws_account_id, aws_region, aws_cloudformation_file, project_name, de
     params = {
         "AccountId": aws_account_id,
         "Region": aws_region,
-        "ProjectName": project_name,
         "DeploymentName": deployment_name,
         "EnvironmentNameLower": environment_name.lower(),
         "EnvironmentNameUpper": environment_name.upper()
     }
+    if project_name:
+        params["ProjectName"] = project_name
 
     vpc_data = get_vpc_data(aws_region, environment_name)
     params.update(vpc_data)
@@ -324,21 +344,26 @@ def deploy(aws_account_id, aws_region, aws_cloudformation_file, project_name, de
     else:
         print("Warning: VPCId not found in params, skipping subnet data retrieval.")
 
-    core_global_base_stack_name = "CORE-global"
-    print(f"Retrieving outputs from global/core stack '{project_name.upper()}-{environment_name.upper()}-{core_global_base_stack_name}' in us-east-1...")
-    core_global_outputs = get_stack_outputs("us-east-1", project_name, environment_name, core_global_base_stack_name)
-    full_core_stack_name = f"{project_name.upper()}-{environment_name.upper()}-{core_global_base_stack_name}".replace('_', '-')
-    print(f"Outputs from {full_core_stack_name} stack: {core_global_outputs}")
-    params.update(core_global_outputs)
-
     if parent_stacks_csv:
-        parent_stack_base_names = [name.strip() for name in parent_stacks_csv.split(',') if name.strip()]
-        if parent_stack_base_names:
-            print(f"Processing parent stacks for additional parameters: {parent_stack_base_names}")
-            for parent_stack_base_name in parent_stack_base_names:
-                full_parent_stack_name = f"{project_name.upper()}-{environment_name.upper()}-{parent_stack_base_name}".replace('_', '-')
-                print(f"Retrieving outputs from parent stack: {full_parent_stack_name} in region {aws_region}...")
-                parent_outputs = get_stack_outputs(aws_region, project_name, environment_name, parent_stack_base_name)
+        parent_stack_entries = [entry.strip() for entry in parent_stacks_csv.split(',') if entry.strip()]
+        if parent_stack_entries:
+            print(f"Processing parent stacks for additional parameters: {parent_stack_entries}")
+            for parent_entry in parent_stack_entries:
+                # Parse {parent}@{region} format
+                if '@' in parent_entry:
+                    parent_stack_base_name, stack_region = parent_entry.split('@', 1)
+                    parent_stack_base_name = parent_stack_base_name.strip()
+                    stack_region = stack_region.strip()
+                else:
+                    parent_stack_base_name = parent_entry
+                    stack_region = aws_region  # Default to deployment region
+                
+                if project_name:
+                    full_parent_stack_name = f"{project_name.upper()}-{environment_name.upper()}-{parent_stack_base_name}".replace('_', '-')
+                else:
+                    full_parent_stack_name = f"{environment_name.upper()}-{parent_stack_base_name}".replace('_', '-')
+                print(f"Retrieving outputs from parent stack: {full_parent_stack_name} in region {stack_region}...")
+                parent_outputs = get_stack_outputs(stack_region, project_name, environment_name, parent_stack_base_name)
                 if parent_outputs:
                     print(f"Adding outputs from parent stack {full_parent_stack_name}: {parent_outputs}")
                     params.update(parent_outputs)
@@ -439,12 +464,19 @@ def deploy(aws_account_id, aws_region, aws_cloudformation_file, project_name, de
                 print(f"    {param_key}: {param_details['Default']} (default)")
 
     print("Constructing CloudFormation stack name...")
-    stack_name_parts = [
-        project_name.upper(),
-        environment_name.upper(),
-        deployment_type,
-        deployment_name
-    ]
+    if project_name:
+        stack_name_parts = [
+            project_name.upper(),
+            environment_name.upper(),
+            deployment_type,
+            deployment_name
+        ]
+    else:
+        stack_name_parts = [
+            environment_name.upper(),
+            deployment_type,
+            deployment_name
+        ]
     stack_name = "-".join(stack_name_parts).replace('_', '-')
     print(f"CloudFormation stack name determined: {stack_name}")
 
@@ -473,12 +505,12 @@ if __name__ == "__main__":
     parser.add_argument("--aws-account-id", required=True, help="Your AWS Account ID.")
     parser.add_argument("--aws-region", required=True, help="The AWS region for deployment (e.g., us-east-1).")
     parser.add_argument("--aws-cloudformation-file", required=True, help="Path to the CloudFormation template file.")
-    parser.add_argument("--project-name", required=True, help="The name of the project.")
+    parser.add_argument("--project-name", required=False, help="The name of the project (optional). If not provided, stack names will be {ENV}-{TYPE}-{NAME} instead of {PROJECT}-{ENV}-{TYPE}-{NAME}.")
     parser.add_argument("--deployment-name", required=True, help="The name of the deployment.")
     parser.add_argument("--deployment-type", required=True, help="The type of the deployment (e.g., service, job).")
     parser.add_argument("--environment-name", required=True, help="The name of the environment (e.g., dev, staging, prod).")
     parser.add_argument("--hosted-zone", required=True, help="The suffix of the hosted zone to search for (e.g., mycompany.com).")
-    parser.add_argument("--parent-stacks", required=False, help="Comma-separated list of parent stack base names to fetch outputs from (e.g., 'stack1-base,stack2-base').")
+    parser.add_argument("--parent-stacks", required=False, help="Comma-separated parent stack names with optional region (e.g., 'CORE-global@us-east-1,CORE-vpc,CORE-network@eu-west-1'). Region defaults to --region if not specified.")
     parser.add_argument("--param", action='append', default=[], help="Additional parameters to pass directly to CloudFormation in 'KEY=VALUE' format. Can be specified multiple times. These override other gathered parameters if keys conflict.")
     
     args = parser.parse_args()
@@ -486,10 +518,10 @@ if __name__ == "__main__":
     deploy(args.aws_account_id, 
            args.aws_region, 
            args.aws_cloudformation_file, 
-           args.project_name, 
            args.deployment_name, 
            args.deployment_type, 
-           args.environment_name, 
+           args.environment_name,
            args.hosted_zone,
+           args.project_name,
            args.parent_stacks,
            args.param)

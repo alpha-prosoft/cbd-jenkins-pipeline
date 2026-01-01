@@ -221,26 +221,30 @@ def get_subnet_data(aws_region, vpc_id):
     return subnet_params
 
 
-def get_stack_outputs(aws_region, project_name, environment_name, base_stack_name):
+def get_stack_outputs(stack_region, project_name, environment_name, base_stack_name):
     """
     Retrieves outputs from a CloudFormation stack.
     
-    Constructs the full stack name as: {PROJECT}-{ENV}-{BASE_STACK_NAME}
+    Constructs the full stack name as: {PROJECT}-{ENV}-{BASE_STACK_NAME} (if project_name provided)
+    or {ENV}-{BASE_STACK_NAME} (if project_name is None)
     and fetches all outputs from that stack.
     
     Args:
-        aws_region: AWS region where the stack exists
-        project_name: Project name (converted to uppercase)
+        stack_region: AWS region where the stack exists (per-stack)
+        project_name: Project name (converted to uppercase), optional - if None, omitted from stack name
         environment_name: Environment name (converted to uppercase)
         base_stack_name: Base stack name (e.g., "CORE-global", "vpc-setup")
         
     Returns:
         dict: {output_key: output_value, ...}
     """
-    actual_stack_name = f"{project_name.upper()}-{environment_name.upper()}-{base_stack_name}".replace('_', '-')
+    if project_name:
+        actual_stack_name = f"{project_name.upper()}-{environment_name.upper()}-{base_stack_name}".replace('_', '-')
+    else:
+        actual_stack_name = f"{environment_name.upper()}-{base_stack_name}".replace('_', '-')
     
-    print(f"Attempting to retrieve outputs for stack: {actual_stack_name} in region {aws_region}...")
-    cf_client = boto3.client('cloudformation', region_name=aws_region)
+    print(f"Attempting to retrieve outputs for stack: {actual_stack_name} in region {stack_region}...")
+    cf_client = boto3.client('cloudformation', region_name=stack_region)
     retrieved_outputs = {}
 
     try:
@@ -381,9 +385,9 @@ def format_params_pretty(params):
 def resolve_baseline_params(
     aws_account_id,
     aws_region,
-    project_name,
     environment_name,
     hosted_zone_suffix,
+    project_name=None,
     parent_stacks_csv=None,
     cli_params_list=None
 ):
@@ -403,9 +407,9 @@ def resolve_baseline_params(
     Args:
         aws_account_id: AWS account ID
         aws_region: AWS region for deployment
-        project_name: Project name
         environment_name: Environment name (e.g., dev, prod)
         hosted_zone_suffix: Hosted zone suffix to search for (e.g., "example.com")
+        project_name: Project name (optional) - if not provided, stack names will be {ENV}-{STACK} instead of {PROJECT}-{ENV}-{STACK}
         parent_stacks_csv: Comma-separated parent stack base names (optional)
         cli_params_list: List of 'KEY=VALUE' strings for overrides (optional)
         
@@ -416,9 +420,9 @@ def resolve_baseline_params(
         params = resolve_baseline_params(
             aws_account_id="123456789012",
             aws_region="us-east-1",
-            project_name="myproject",
             environment_name="dev",
             hosted_zone_suffix="example.com",
+            project_name="myproject",
             parent_stacks_csv="CORE-vpc,CORE-network",
             cli_params_list=["BuildId=custom-123", "CustomParam=value"]
         )
@@ -426,7 +430,7 @@ def resolve_baseline_params(
     print("Starting parameter resolution process...")
     print(f"AWS Account ID: {aws_account_id}")
     print(f"AWS Region: {aws_region}")
-    print(f"Project Name: {project_name}")
+    print(f"Project Name: {project_name if project_name else '(not specified)'}")
     print(f"Environment Name: {environment_name}")
     print(f"Hosted Zone Suffix: {hosted_zone_suffix}")
 
@@ -435,10 +439,11 @@ def resolve_baseline_params(
     params = {
         "AccountId": aws_account_id,
         "Region": aws_region,
-        "ProjectName": project_name,
         "EnvironmentNameLower": environment_name.lower(),
         "EnvironmentNameUpper": environment_name.upper()
     }
+    if project_name:
+        params["ProjectName"] = project_name
     print(f"Base parameters: {params}")
 
     # 2. AWS infrastructure discovery
@@ -472,25 +477,28 @@ def resolve_baseline_params(
         except FileNotFoundError:
             print("Warning: git command not found. BuildId will not be set automatically.")
 
-    # 4. Core global stack outputs
-    print("\n=== Phase 4: Core Global Stack Outputs (us-east-1) ===")
-    core_global_base_stack_name = "CORE-global"
-    print(f"Retrieving outputs from global/core stack '{project_name.upper()}-{environment_name.upper()}-{core_global_base_stack_name}' in us-east-1...")
-    core_global_outputs = get_stack_outputs("us-east-1", project_name, environment_name, core_global_base_stack_name)
-    full_core_stack_name = f"{project_name.upper()}-{environment_name.upper()}-{core_global_base_stack_name}".replace('_', '-')
-    print(f"Outputs from {full_core_stack_name} stack: {core_global_outputs}")
-    params.update(core_global_outputs)
-
-    # 5. Parent stack outputs
-    print("\n=== Phase 5: Parent Stack Outputs ===")
+    # 4. Parent stack outputs
+    print("\n=== Phase 4: Parent Stack Outputs ===")
     if parent_stacks_csv:
-        parent_stack_base_names = [name.strip() for name in parent_stacks_csv.split(',') if name.strip()]
-        if parent_stack_base_names:
-            print(f"Processing parent stacks for additional parameters: {parent_stack_base_names}")
-            for parent_stack_base_name in parent_stack_base_names:
-                full_parent_stack_name = f"{project_name.upper()}-{environment_name.upper()}-{parent_stack_base_name}".replace('_', '-')
-                print(f"Retrieving outputs from parent stack: {full_parent_stack_name} in region {aws_region}...")
-                parent_outputs = get_stack_outputs(aws_region, project_name, environment_name, parent_stack_base_name)
+        parent_stack_entries = [entry.strip() for entry in parent_stacks_csv.split(',') if entry.strip()]
+        if parent_stack_entries:
+            print(f"Processing parent stacks for additional parameters: {parent_stack_entries}")
+            for parent_entry in parent_stack_entries:
+                # Parse {parent}@{region} format
+                if '@' in parent_entry:
+                    parent_stack_base_name, stack_region = parent_entry.split('@', 1)
+                    parent_stack_base_name = parent_stack_base_name.strip()
+                    stack_region = stack_region.strip()
+                else:
+                    parent_stack_base_name = parent_entry
+                    stack_region = aws_region  # Default to deployment region
+                
+                if project_name:
+                    full_parent_stack_name = f"{project_name.upper()}-{environment_name.upper()}-{parent_stack_base_name}".replace('_', '-')
+                else:
+                    full_parent_stack_name = f"{environment_name.upper()}-{parent_stack_base_name}".replace('_', '-')
+                print(f"Retrieving outputs from parent stack: {full_parent_stack_name} in region {stack_region}...")
+                parent_outputs = get_stack_outputs(stack_region, project_name, environment_name, parent_stack_base_name)
                 if parent_outputs:
                     print(f"Adding outputs from parent stack {full_parent_stack_name}: {parent_outputs}")
                     params.update(parent_outputs)
@@ -501,8 +509,8 @@ def resolve_baseline_params(
     else:
         print("No parent stacks specified.")
 
-    # 6. CLI parameter overrides
-    print("\n=== Phase 6: CLI Parameter Overrides ===")
+    # 5. CLI parameter overrides
+    print("\n=== Phase 5: CLI Parameter Overrides ===")
     if cli_params_list:
         print(f"Processing CLI parameters from --param to update gathered params: {cli_params_list}")
         for p_str in cli_params_list:
@@ -580,9 +588,17 @@ Examples:
     --project-name myproject \\
     --environment-name dev \\
     --hosted-zone example.com \\
-    --parent-stacks CORE-vpc,CORE-network \\
+    --parent-stacks CORE-global@us-east-1,CORE-vpc,CORE-network \\
     --param BuildId=custom-123 \\
     --param CustomParam=value
+
+  # Without project name (stack names will be {ENV}-{STACK})
+  python scripts/params.py \\
+    --aws-account-id 123456789012 \\
+    --aws-region us-east-1 \\
+    --environment-name dev \\
+    --hosted-zone example.com \\
+    --parent-stacks CORE-global@us-east-1
 
   # Quiet mode (suppress progress messages)
   python scripts/params.py \\
@@ -605,9 +621,9 @@ Examples:
                         metavar='REGION',
                         help="AWS region (e.g., us-east-1)")
     parser.add_argument("--project-name", 
-                        required=True,
+                        required=False,
                         metavar='PROJECT',
-                        help="Project name")
+                        help="Project name (optional). If not provided, stack names will be {ENV}-{STACK} instead of {PROJECT}-{ENV}-{STACK}")
     parser.add_argument("--environment-name", 
                         required=True,
                         metavar='ENVIRONMENT',
@@ -618,7 +634,7 @@ Examples:
                         help="Hosted zone suffix (e.g., example.com)")
     parser.add_argument("--parent-stacks",
                         metavar='STACKS',
-                        help="Comma-separated parent stack names (e.g., 'CORE-vpc,CORE-network')")
+                        help="Comma-separated parent stack names with optional region (e.g., 'CORE-global@us-east-1,CORE-vpc,CORE-network@eu-west-1'). Region defaults to --region if not specified.")
     parser.add_argument("--param", 
                         action='append', 
                         default=[],
@@ -659,9 +675,9 @@ Examples:
         params = resolve_baseline_params(
             aws_account_id=args.aws_account_id,
             aws_region=args.aws_region,
-            project_name=args.project_name,
             environment_name=args.environment_name,
             hosted_zone_suffix=args.hosted_zone,
+            project_name=args.project_name,
             parent_stacks_csv=args.parent_stacks,
             cli_params_list=args.param if args.param else None
         )
