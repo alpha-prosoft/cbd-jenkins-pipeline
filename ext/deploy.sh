@@ -106,9 +106,22 @@ params=$(echo "${target_access}" |
           "ServiceName" : "'${ServiceName}'"
            }')
 
+resource_tags=$(jq -n \
+  --arg serviceName "${ServiceName}" \
+  --arg envNameLower "${EnvironmentNameUpper,,}" \
+  --arg buildId "${BUILD_ID}" \
+  --arg version "${BUILD_ID}" \
+  '{
+    "ServiceName": $serviceName,
+    "EnvironmentNameLower": $envNameLower,
+    "BuildId": $buildId,
+    "Version": $version
+  }')
+
 echo '{ "params" : '${params}', 
         "pipeline_params" : '${pipeline_access}', 
-        "resource_tags" : {} }' >$work_dir/group_vars/all.json
+        "resource_tags" : '${resource_tags}',
+        "repo_dir" : "'${HOME}'" }' >$work_dir/group_vars/all.json
 
 echo "#### Final params in group_vars/all.json #############"
 jq '.' $work_dir/group_vars/all.json
