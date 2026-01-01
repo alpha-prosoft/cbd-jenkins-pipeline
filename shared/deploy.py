@@ -299,12 +299,16 @@ def get_stack_outputs(stack_region, project_name, environment_name, base_stack_n
 
     except cf_client.exceptions.ClientError as e:
         if "does not exist" in str(e):
-            print(f"Warning: Stack {actual_stack_name} does not exist. Cannot retrieve outputs.")
+            print(f"ERROR: Stack {actual_stack_name} does not exist in region {stack_region}.")
+            print(f"  Stack name searched: {actual_stack_name}")
+            print(f"  Region searched: {stack_region}")
+            print(f"  AWS error: {e}")
+            return retrieved_outputs  # Return empty dict to trigger failure in caller
         else:
-            print(f"Error describing stack {actual_stack_name} to get outputs: {e}")
+            print(f"ERROR: Failed to describe stack {actual_stack_name} to get outputs: {e}")
             raise
     except Exception as e:
-        print(f"An unexpected error occurred while retrieving outputs for stack {actual_stack_name}: {e}")
+        print(f"ERROR: Unexpected error occurred while retrieving outputs for stack {actual_stack_name}: {e}")
         raise
     
     return retrieved_outputs
@@ -335,19 +339,29 @@ def deploy(aws_account_id, aws_region, aws_cloudformation_file, deployment_name,
     if build_id:
         params["BuildId"] = build_id
         print(f"Using provided BuildId: {build_id}")
+    
+    print(f"Initial parameters set: {params}")
 
+    print("\n=== Fetching VPC Data ===")
     vpc_data = get_vpc_data(aws_region, environment_name)
     params.update(vpc_data)
+    print(f"VPC data added: {vpc_data}")
 
+    print("\n=== Fetching Hosted Zone Data ===")
     hosted_zone_data = get_hosted_zone_data(aws_region, hosted_zone_suffix)
     params.update(hosted_zone_data)
+    print(f"Hosted zone data added: {hosted_zone_data}")
     
+    print("\n=== Fetching Subnet Data ===")
     vpc_id_for_subnets = params.get("VPCId")
     if vpc_id_for_subnets:
         subnet_data = get_subnet_data(aws_region, vpc_id_for_subnets)
         params.update(subnet_data)
+        print(f"Subnet data added: {len(subnet_data)} subnet(s)")
     else:
         print("Warning: VPCId not found in params, skipping subnet data retrieval.")
+
+    print("\n=== Processing Parent Stacks ===")
 
     if parent_stacks_csv:
         parent_stack_entries = [entry.strip() for entry in parent_stacks_csv.split(',') if entry.strip()]
@@ -367,16 +381,28 @@ def deploy(aws_account_id, aws_region, aws_cloudformation_file, deployment_name,
                     full_parent_stack_name = f"{project_name.upper()}-{environment_name.upper()}-{parent_stack_base_name}".replace('_', '-')
                 else:
                     full_parent_stack_name = f"{environment_name.upper()}-{parent_stack_base_name}".replace('_', '-')
+                
                 print(f"Retrieving outputs from parent stack: {full_parent_stack_name} in region {stack_region}...")
+                print(f"  Parent entry: {parent_entry}")
+                print(f"  Base stack name: {parent_stack_base_name}")
+                print(f"  Target region: {stack_region}")
+                
                 parent_outputs = get_stack_outputs(stack_region, project_name, environment_name, parent_stack_base_name)
+                
                 if parent_outputs:
+                    print(f"Successfully retrieved {len(parent_outputs)} output(s) from parent stack {full_parent_stack_name}")
                     print(f"Adding outputs from parent stack {full_parent_stack_name}: {parent_outputs}")
                     params.update(parent_outputs)
                 else:
-                    print(f"No outputs found or retrieved for parent stack {full_parent_stack_name}.")
+                    error_msg = f"CRITICAL ERROR: Failed to retrieve outputs from required parent stack '{full_parent_stack_name}' in region '{stack_region}'. This stack is required for deployment and must exist with valid outputs."
+                    print(f"\n{'!' * 80}")
+                    print(error_msg)
+                    print(f"{'!' * 80}\n")
+                    raise RuntimeError(error_msg)
         else:
             print("No valid parent stack names found in --parent-stacks input.")
 
+    print("\n=== Auto-generating BuildId (if needed) ===")
     if "BuildId" not in params:
         try:
             git_hash = subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD']).decode('utf-8').strip()
@@ -386,9 +412,11 @@ def deploy(aws_account_id, aws_region, aws_cloudformation_file, deployment_name,
             print(f"Warning: Could not determine git revision for BuildId: {e}. BuildId will not be set automatically.")
         except FileNotFoundError:
             print("Warning: git command not found. BuildId will not be set automatically.")
+    else:
+        print(f"BuildId already set: {params['BuildId']}")
 
 
-
+    print("\n=== Fetching Parameters from SSM Parameter Store ===")
     ssm_client = boto3.client('ssm', region_name=aws_region)
     param_store_key = f"/deploy/{params['EnvironmentNameLower']}/params.json"
     print(f"Checking for parameters in SSM Parameter Store at key: {param_store_key}")
@@ -398,12 +426,13 @@ def deploy(aws_account_id, aws_region, aws_cloudformation_file, deployment_name,
         print("Found parameters in SSM Parameter Store. Merging them.")
         ssm_params = json.loads(param_value)
         params.update(ssm_params)
-        print(f"Merged parameters from SSM: {ssm_params}")
+        print(f"Merged {len(ssm_params)} parameter(s) from SSM: {ssm_params}")
     except ssm_client.exceptions.ParameterNotFound:
         print(f"No parameters found in SSM Parameter Store at {param_store_key}. Skipping.")
     except Exception as e:
         print(f"Error fetching or parsing parameters from SSM Parameter Store: {e}")
 
+    print("\n=== Processing CLI Parameter Overrides ===")
     cli_param_dict_parsed = {}
     if cli_params_list:
         print(f"Processing CLI parameters from --param to update gathered params: {cli_params_list}")
@@ -418,6 +447,9 @@ def deploy(aws_account_id, aws_region, aws_cloudformation_file, deployment_name,
                 cli_param_dict_parsed[key] = value
             else:
                 print(f"Warning: CLI parameter '{p_str}' from --param is not in KEY=VALUE format and will be ignored.")
+        print(f"Applied {len(cli_param_dict_parsed)} CLI parameter override(s)")
+    else:
+        print("No CLI parameter overrides provided.")
 
     print(f"Reading and parsing CloudFormation template: {aws_cloudformation_file}...")
     try:
@@ -450,6 +482,10 @@ def deploy(aws_account_id, aws_region, aws_cloudformation_file, deployment_name,
     print("Resolving parameters for CloudFormation deployment...")
     template_parameters = cf_template.get('Parameters', {})
     cf_deploy_params = []
+    
+    print(f"\nTemplate requires {len(template_parameters)} parameter(s):")
+    missing_params = []
+    
     for param_key, param_details in template_parameters.items():
         if param_key in params:
             param_value = str(params[param_key])
@@ -464,9 +500,20 @@ def deploy(aws_account_id, aws_region, aws_cloudformation_file, deployment_name,
                 print(f"    {param_key}: {param_value}")
         else:
             if 'Default' not in param_details:
-                print(f"    {param_key}: <<< MISSING")
+                print(f"    {param_key}: <<< MISSING (NO DEFAULT)")
+                missing_params.append(param_key)
             else:
                 print(f"    {param_key}: {param_details['Default']} (default)")
+    
+    if missing_params:
+        error_msg = f"CRITICAL ERROR: {len(missing_params)} required parameter(s) are missing and have no default values: {', '.join(missing_params)}"
+        print(f"\n{'!' * 80}")
+        print(error_msg)
+        print(f"{'!' * 80}\n")
+        print("Available parameters in context:")
+        for key in sorted(params.keys()):
+            print(f"  - {key}")
+        raise RuntimeError(error_msg)
 
     print("Constructing CloudFormation stack name...")
     if project_name:

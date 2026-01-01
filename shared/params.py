@@ -271,12 +271,16 @@ def get_stack_outputs(stack_region, project_name, environment_name, base_stack_n
 
     except cf_client.exceptions.ClientError as e:
         if "does not exist" in str(e):
-            print(f"Warning: Stack {actual_stack_name} does not exist. Cannot retrieve outputs.")
+            print(f"ERROR: Stack {actual_stack_name} does not exist in region {stack_region}.")
+            print(f"  Stack name searched: {actual_stack_name}")
+            print(f"  Region searched: {stack_region}")
+            print(f"  AWS error: {e}")
+            return retrieved_outputs  # Return empty dict to trigger failure in caller
         else:
-            print(f"Error describing stack {actual_stack_name} to get outputs: {e}")
+            print(f"ERROR: Failed to describe stack {actual_stack_name} to get outputs: {e}")
             raise
     except Exception as e:
-        print(f"An unexpected error occurred while retrieving outputs for stack {actual_stack_name}: {e}")
+        print(f"ERROR: Unexpected error occurred while retrieving outputs for stack {actual_stack_name}: {e}")
         raise
     
     return retrieved_outputs
@@ -497,13 +501,24 @@ def resolve_baseline_params(
                     full_parent_stack_name = f"{project_name.upper()}-{environment_name.upper()}-{parent_stack_base_name}".replace('_', '-')
                 else:
                     full_parent_stack_name = f"{environment_name.upper()}-{parent_stack_base_name}".replace('_', '-')
+                
                 print(f"Retrieving outputs from parent stack: {full_parent_stack_name} in region {stack_region}...")
+                print(f"  Parent entry: {parent_entry}")
+                print(f"  Base stack name: {parent_stack_base_name}")
+                print(f"  Target region: {stack_region}")
+                
                 parent_outputs = get_stack_outputs(stack_region, project_name, environment_name, parent_stack_base_name)
+                
                 if parent_outputs:
+                    print(f"Successfully retrieved {len(parent_outputs)} output(s) from parent stack {full_parent_stack_name}")
                     print(f"Adding outputs from parent stack {full_parent_stack_name}: {parent_outputs}")
                     params.update(parent_outputs)
                 else:
-                    print(f"No outputs found or retrieved for parent stack {full_parent_stack_name}.")
+                    error_msg = f"CRITICAL ERROR: Failed to retrieve outputs from required parent stack '{full_parent_stack_name}' in region '{stack_region}'. This stack is required for deployment and must exist with valid outputs."
+                    print(f"\n{'!' * 80}")
+                    print(error_msg)
+                    print(f"{'!' * 80}\n")
+                    raise RuntimeError(error_msg)
         else:
             print("No valid parent stack names found in --parent-stacks input.")
     else:
