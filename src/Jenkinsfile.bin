@@ -50,14 +50,14 @@ node(agentLabel) {
               set -ex
               docker build --network=host \
                 --pull ${GLOBAL_PROPERTIES_DOCKER_BUILD_ARGS} \
-                --build-arg APP_VERSION=1.0.b${BUILD_ID} \
+                --build-arg APP_VERSION=1.0.b${BUILD_NUMBER} \
                 --build-arg DEPLOY_TARGET="${deployTarget}" \
-                -t "${env.DOCKER_URL}/${DOCKER_ORG}/${JOB_BASE_NAME}:b${BUILD_ID}" .
+                -t "${env.DOCKER_URL}/${DOCKER_ORG}/${JOB_BASE_NAME}:b${BUILD_NUMBER}" .
               """
         }
     }
     stage("Deploy") {
-        String dockerImageUrl = "${DOCKER_URL}/${DOCKER_ORG}/${JOB_BASE_NAME}:b${BUILD_ID}"
+        String dockerImageUrl = "${DOCKER_URL}/${DOCKER_ORG}/${JOB_BASE_NAME}:b${BUILD_NUMBER}"
         configFileProvider([configFile(fileId: 'global-maven-settings', variable: 'MAVEN_SETTINGS')]) {
           String dockerBuildArgs = """--group-add 999
                                      -v /home/jenkins/.gitconfig:/home/build/.gitconfig 
@@ -68,7 +68,7 @@ node(agentLabel) {
           withDockerContainer(args: dockerBuildArgs,
                 image: dockerImageUrl) {
 
-            repo.uploadLibs(deployTarget, true, env.BUILD_ID)
+            repo.uploadLibs(deployTarget, true, env.BUILD_NUMBER)
           }
         }
     }

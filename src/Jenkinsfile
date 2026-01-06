@@ -65,27 +65,28 @@ node(agentLabel) {
                    --secret id=gitcookie,src=/home/jenkins/.gitcookie \
                    --secret id=settings.xml,src=$MAVEN_SETTINGS \
                    --build-arg DEPLOY_TARGET="${deployTarget}" \
-                   -t "${env.DOCKER_URL}/${DOCKER_ORG}/\${JOB_BASE_NAME}:b\${BUILD_ID}"  .
+                   -t "${env.DOCKER_URL}/${DOCKER_ORG}/\${JOB_BASE_NAME}:b\${BUILD_NUMBER}"  .
 
               if [[ -f Dockerfile.runtime ]]; then
                 echo "Building runtime image"
                 docker build --pull \${GLOBAL_PROPERTIES_DOCKER_BUILD_ARGS} \
                    --secret id=gitcookie,src=/home/jenkins/.gitcookie \
                    --secret id=settings.xml,src=$MAVEN_SETTINGS \
-                   --build-arg BUILD_ID=\${BUILD_ID} \
-                   -t "${env.DOCKER_URL}/${DOCKER_ORG}/\${JOB_BASE_NAME}-runtime:b\${BUILD_ID}" -f Dockerfile.runtime .
+                   --build-arg BUILD_ID=\${BUILD_NUMBER} \
+                   --build-arg BUILD_NUMBER=\${BUILD_NUMBER} \
+                   -t "${env.DOCKER_URL}/${DOCKER_ORG}/\${JOB_BASE_NAME}-runtime:b\${BUILD_NUMBER}" -f Dockerfile.runtime .
               fi
 
-              docker tag "${env.DOCKER_URL}/${DOCKER_ORG}/\${JOB_BASE_NAME}:b\${BUILD_ID}" \
-                  "${env.DOCKER_PUSH_URL}/${DOCKER_ORG}/\${JOB_BASE_NAME}:b\${BUILD_ID}"
+              docker tag "${env.DOCKER_URL}/${DOCKER_ORG}/\${JOB_BASE_NAME}:b\${BUILD_NUMBER}" \
+                  "${env.DOCKER_PUSH_URL}/${DOCKER_ORG}/\${JOB_BASE_NAME}:b\${BUILD_NUMBER}"
 
-              docker push "${env.DOCKER_PUSH_URL}/${DOCKER_ORG}/\${JOB_BASE_NAME}:b\${BUILD_ID}"
+              docker push "${env.DOCKER_PUSH_URL}/${DOCKER_ORG}/\${JOB_BASE_NAME}:b\${BUILD_NUMBER}"
               if [[ -f Dockerfile.runtime ]]; then
                  echo "Pushing runtime"
                  docker tag  \
-                    "${env.DOCKER_URL}/${DOCKER_ORG}/\${JOB_BASE_NAME}-runtime:b\${BUILD_ID}" \
-                     ${env.DOCKER_PUSH_URL}/${DOCKER_ORG}/\${JOB_BASE_NAME}-runtime:b\${BUILD_ID}
-                 docker push "${env.DOCKER_PUSH_URL}/${DOCKER_ORG}/\${JOB_BASE_NAME}-runtime:b\${BUILD_ID}"
+                    "${env.DOCKER_URL}/${DOCKER_ORG}/\${JOB_BASE_NAME}-runtime:b\${BUILD_NUMBER}" \
+                     ${env.DOCKER_PUSH_URL}/${DOCKER_ORG}/\${JOB_BASE_NAME}-runtime:b\${BUILD_NUMBER}
+                 docker push "${env.DOCKER_PUSH_URL}/${DOCKER_ORG}/\${JOB_BASE_NAME}-runtime:b\${BUILD_NUMBER}"
               fi
               """)
              }
@@ -106,7 +107,7 @@ node(agentLabel) {
       error 'Deployment Failed'
     }
     try {
-      String dockerImage = "${env.DOCKER_URL}/${DOCKER_ORG}/${env.JOB_BASE_NAME}:b${env.BUILD_ID}"
+      String dockerImage = "${env.DOCKER_URL}/${DOCKER_ORG}/${env.JOB_BASE_NAME}:b${env.BUILD_NUMBER}"
 
       sh 'id'
       sh 'ls -la'
@@ -135,7 +136,7 @@ node(agentLabel) {
                 String testAccount = config["testAccount"]
                 String prodAccount = config["prodAccount"]
 
-                repo.uploadLibs(deployTarget, false, env.BUILD_ID)
+                repo.uploadLibs(deployTarget, false, env.BUILD_NUMBER)
                 wrap([$class: 'BuildUser']) {
                     Boolean deployed = false
                     Boolean deployedToProd = false

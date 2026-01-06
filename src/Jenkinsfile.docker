@@ -60,7 +60,7 @@ node(agentLabel) {
             echo "Building \${i}"
             docker build ${GLOBAL_PROPERTIES_DOCKER_BUILD_ARGS} \
               -t "${env.DOCKER_URL}/${DOCKER_ORG}/\${i#*.}:local-build" \
-              -t "${env.DOCKER_URL}/${DOCKER_ORG}/\${i#*.}:b${BUILD_ID}" -f \${i} .
+              -t "${env.DOCKER_URL}/${DOCKER_ORG}/\${i#*.}:b${BUILD_NUMBER}" -f \${i} .
           done
 
           
@@ -75,10 +75,12 @@ node(agentLabel) {
             mkdir -p schema
             cp ../../scripts . -r
 
-            docker build ${GLOBAL_PROPERTIES_DOCKER_BUILD_ARGS} --build-arg BUILD_ID=${BUILD_ID} \
+            docker build ${GLOBAL_PROPERTIES_DOCKER_BUILD_ARGS} \
+              --build-arg BUILD_NUMBER=${BUILD_NUMBER} \
+              --build-arg BUILD_ID=${BUILD_NUMBER} \
               --build-arg DEPLOY_TARGET=DEV \
               -t "${env.DOCKER_URL}/${DOCKER_ORG}/\${i#*.}:local-build" \
-              -t "${env.DOCKER_URL}/${DOCKER_ORG}/\${i#*.}:b${BUILD_ID}" .
+              -t "${env.DOCKER_URL}/${DOCKER_ORG}/\${i#*.}:b${BUILD_NUMBER}" .
             cd ../../
           done
         """
@@ -90,10 +92,10 @@ node(agentLabel) {
                      echo "Pushing \${i}"
                      echo $PASSWORD | docker login -u $USERNAME --password-stdin ${env.DOCKER_PUSH_URL}
                      docker tag  \
-                       "${env.DOCKER_URL}/${DOCKER_ORG}/\${i#*.}:b${BUILD_ID}" \
-                       "${env.DOCKER_PUSH_URL}/${DOCKER_ORG}/\${i#*.}:b${BUILD_ID}"
+                       "${env.DOCKER_URL}/${DOCKER_ORG}/\${i#*.}:b${BUILD_NUMBER}" \
+                       "${env.DOCKER_PUSH_URL}/${DOCKER_ORG}/\${i#*.}:b${BUILD_NUMBER}"
   
-                     docker push "${env.DOCKER_PUSH_URL}/${DOCKER_ORG}/\${i#*.}:b${BUILD_ID}"
+                     docker push "${env.DOCKER_PUSH_URL}/${DOCKER_ORG}/\${i#*.}:b${BUILD_NUMBER}"
                  done
                """
             if (deployTarget == "PROD") {
@@ -102,7 +104,7 @@ node(agentLabel) {
                      echo "Pushing \${i}"
                      echo $PASSWORD | docker login -u $USERNAME --password-stdin ${env.DOCKER_PUSH_URL}
                      docker tag  \
-                       "${env.DOCKER_URL}/${DOCKER_ORG}/\${i#*.}:b${BUILD_ID}" \
+                       "${env.DOCKER_URL}/${DOCKER_ORG}/\${i#*.}:b${BUILD_NUMBER}" \
                        "${env.DOCKER_PUSH_URL}/${DOCKER_ORG}/\${i#*.}:latest"
   
                      docker push "${env.DOCKER_PUSH_URL}/${DOCKER_ORG}/\${i#*.}:latest"
