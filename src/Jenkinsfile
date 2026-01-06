@@ -62,6 +62,8 @@ node(agentLabel) {
               docker login --username "\${DOCKER_USERNAME}" --password "\${DOCKER_PASSWORD}" ${env.DOCKER_PUSH_URL}
 
               docker build --pull ${GLOBAL_PROPERTIES_DOCKER_BUILD_ARGS} \
+                   --build-arg BUILD_ID=\${BUILD_NUMBER} \
+                   --build-arg BUILD_NUMBER=\${BUILD_NUMBER} \
                    --secret id=gitcookie,src=/home/jenkins/.gitcookie \
                    --secret id=settings.xml,src=$MAVEN_SETTINGS \
                    --build-arg DEPLOY_TARGET="${deployTarget}" \
