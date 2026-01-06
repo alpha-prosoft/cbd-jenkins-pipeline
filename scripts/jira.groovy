@@ -1,5 +1,12 @@
 def getJiraIssue() {
     echo "Getting jira issue from commit message"
+    
+    // Check if GERRIT_CHANGE_SUBJECT is set
+    if (!env.GERRIT_CHANGE_SUBJECT) {
+        echo "INFO: GERRIT_CHANGE_SUBJECT not set, skipping JIRA extraction"
+        return null
+    }
+    
     try {
         def response = sh(label: "Extract jira issue", returnStdout: true, script: """#!/bin/bash 
             JIRA_PATTERN="^\\[[a-zA-Z0-9,\\.\\_\\-]+-[0-9]+\\]"
@@ -74,7 +81,7 @@ def checkJira() {
                      sshUserPrivateKey(credentialsId: 'gerrit-ssh', keyFileVariable: 'SSHFILEPATH', passphraseVariable: 'SSHPASSPHRASE', usernameVariable: 'SSHUSERNAME')]) {
         echo "INFO: Check jira ticket status"
         if (!env.GERRIT_CHANGE_SUBJECT) {
-            echo "INFO: skipping Gerrit submit test"
+            echo "INFO: skipping JIRA check - not a Gerrit build"
             return true;
         }
 
@@ -184,6 +191,11 @@ def checkJira() {
 }
 
 def close() {
+    if (!env.GERRIT_CHANGE_SUBJECT) {
+        echo "INFO: Skipping JIRA close - not a Gerrit build"
+        return
+    }
+    
     withCredentials([usernamePassword(credentialsId: 'jira-http', passwordVariable: 'JIRA_PW', usernameVariable: 'JIRA_USER')]) {
         def jiraIssue = getJiraIssue()
         echo "Checking JIRA: ${jiraIssue}"
