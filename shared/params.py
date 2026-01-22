@@ -7,7 +7,7 @@ It can be used both as a CLI tool and as an importable module.
 
 Parameter Resolution Order (later sources override earlier ones):
 1. Base CLI arguments (AccountId, Region, ProjectName, etc.)
-2. AWS infrastructure discovery (VPC, subnets, hosted zones)
+2. AWS infrastructure discovery (VPC, subnets, route tables, hosted zones)
 3. Auto-generated values (BuildId from git)
 4. Core global stack outputs (us-east-1)
 5. Parent stack outputs (if specified)
@@ -182,13 +182,17 @@ def get_subnet_data(aws_region, vpc_id):
     Retrieves all subnets in the VPC and creates a mapping from subnet Name tags
     to subnet IDs. Subnets without Name tags are skipped.
     
+    Handles AWS Control Tower naming conventions:
+    - Converts "aws-controltower-PrivateSubnet1A" to "PrivateSubnet1A"
+    - Converts "aws-controltower-PublicSubnet1A" to "PublicSubnet1A"
+    
     Args:
         aws_region: AWS region
         vpc_id: VPC ID to fetch subnets for
         
     Returns:
         dict: {subnet_name: subnet_id, ...}
-        Example: {"public-subnet-1a": "subnet-abc123", "private-subnet-1a": "subnet-def456"}
+        Example: {"PrivateSubnet1A": "subnet-abc123", "PublicSubnet2A": "subnet-def456"}
     """
     print(f"Fetching subnet data for VPC {vpc_id} in region {aws_region}...")
     ec2_client = boto3.client('ec2', region_name=aws_region)
@@ -209,8 +213,17 @@ def get_subnet_data(aws_region, vpc_id):
                         if tag['Key'] == 'Name':
                             subnet_name_tag = tag['Value']
                             break
+                
                 if subnet_name_tag:
-                    subnet_params[subnet_name_tag] = subnet_id
+                    # Parse AWS Control Tower subnet names
+                    # Convert "aws-controltower-PrivateSubnet1A" to "PrivateSubnet1A"
+                    if subnet_name_tag.startswith('aws-controltower-'):
+                        parsed_name = subnet_name_tag.replace('aws-controltower-', '')
+                        print(f"Parsed Control Tower subnet: {subnet_name_tag} -> {parsed_name} = {subnet_id}")
+                        subnet_params[parsed_name] = subnet_id
+                    else:
+                        # For non-Control Tower subnets, use the name as-is
+                        subnet_params[subnet_name_tag] = subnet_id
                 else:
                     print(f"Warning: Subnet {subnet_id} does not have a 'Name' tag. It will not be added to params by its name.")
     except Exception as e:
@@ -219,6 +232,65 @@ def get_subnet_data(aws_region, vpc_id):
 
     print(f"Retrieved Subnet Info: {subnet_params}")
     return subnet_params
+
+
+def get_route_table_data(aws_region, vpc_id):
+    """
+    Fetches route table data for the specified VPC.
+    
+    Retrieves all route tables in the VPC and creates a mapping from route table Name tags
+    to route table IDs. Route tables without Name tags are skipped.
+    
+    Handles AWS Control Tower naming conventions:
+    - Converts "aws-controltower-PrivateSubnet1ARouteTable" to "PrivateSubnet1ARouteTable"
+    - Converts "aws-controltower-PublicSubnet1ARouteTable" to "PublicSubnet1ARouteTable"
+    
+    Args:
+        aws_region: AWS region
+        vpc_id: VPC ID to fetch route tables for
+        
+    Returns:
+        dict: {route_table_name: route_table_id, ...}
+        Example: {"PrivateSubnet1ARouteTable": "rtb-abc123", "PublicSubnet1ARouteTable": "rtb-def456"}
+    """
+    print(f"Fetching route table data for VPC {vpc_id} in region {aws_region}...")
+    ec2_client = boto3.client('ec2', region_name=aws_region)
+    route_table_params = {}
+
+    if not vpc_id:
+        print("Warning: VPCId not provided, cannot fetch route table data.")
+        return route_table_params
+
+    try:
+        paginator = ec2_client.get_paginator('describe_route_tables')
+        for page in paginator.paginate(Filters=[{'Name': 'vpc-id', 'Values': [vpc_id]}]):
+            for route_table in page['RouteTables']:
+                route_table_id = route_table['RouteTableId']
+                route_table_name_tag = None
+                if 'Tags' in route_table:
+                    for tag in route_table['Tags']:
+                        if tag['Key'] == 'Name':
+                            route_table_name_tag = tag['Value']
+                            break
+                
+                if route_table_name_tag:
+                    # Parse AWS Control Tower route table names
+                    # Convert "aws-controltower-PrivateSubnet1ARouteTable" to "PrivateSubnet1ARouteTable"
+                    if route_table_name_tag.startswith('aws-controltower-'):
+                        parsed_name = route_table_name_tag.replace('aws-controltower-', '')
+                        print(f"Parsed Control Tower route table: {route_table_name_tag} -> {parsed_name} = {route_table_id}")
+                        route_table_params[parsed_name] = route_table_id
+                    else:
+                        # For non-Control Tower route tables, use the name as-is
+                        route_table_params[route_table_name_tag] = route_table_id
+                else:
+                    print(f"Warning: Route table {route_table_id} does not have a 'Name' tag. It will not be added to params by its name.")
+    except Exception as e:
+        print(f"Error fetching route table data: {e}")
+        raise
+
+    print(f"Retrieved Route Table Info: {route_table_params}")
+    return route_table_params
 
 
 def get_stack_outputs(stack_region, project_name, environment_name, base_stack_name):
@@ -312,6 +384,7 @@ def format_params_pretty(params):
         'hosted_zones': 'Route53 Hosted Zones',
         'build': 'Build Information',
         'subnets': 'Subnets',
+        'route_tables': 'Route Tables',
         'core_stack': 'Core Stack Outputs',
         'parent_stacks': 'Parent Stack Outputs',
         'overrides': 'CLI Overrides'
@@ -325,8 +398,11 @@ def format_params_pretty(params):
         category_params = metadata.get(category_key, [])
         
         if category_key == 'subnets':
-            # Special handling for subnets (any param containing 'subnet')
-            category_params = [k for k in params.keys() if 'subnet' in k.lower() and k != '_metadata']
+            # Special handling for subnets (any param containing 'subnet' but not 'RouteTable')
+            category_params = [k for k in params.keys() if 'subnet' in k.lower() and 'routetable' not in k.lower() and k != '_metadata']
+        elif category_key == 'route_tables':
+            # Special handling for route tables (any param containing 'routetable')
+            category_params = [k for k in params.keys() if 'routetable' in k.lower() and k != '_metadata']
         elif category_key in ['core_stack', 'parent_stacks', 'overrides']:
             # These are tracked separately, skip for now
             continue
@@ -345,13 +421,26 @@ def format_params_pretty(params):
                     output_lines.append(f"  {param_key:35} = {value}")
     
     # Display subnet parameters if any
-    subnet_params = {k: v for k, v in params.items() if 'subnet' in k.lower() and k not in displayed_params}
+    subnet_params = {k: v for k, v in params.items() if 'subnet' in k.lower() and 'routetable' not in k.lower() and k not in displayed_params}
     if subnet_params:
         output_lines.append(f"\nSubnets:")
         output_lines.append("-" * 40)
         for param_key in sorted(subnet_params.keys()):
             displayed_params.add(param_key)
             value = subnet_params[param_key]
+            if value is None or value == '':
+                output_lines.append(f"  {param_key:35} = <MISSING>")
+            else:
+                output_lines.append(f"  {param_key:35} = {value}")
+    
+    # Display route table parameters if any
+    route_table_params = {k: v for k, v in params.items() if 'routetable' in k.lower() and k not in displayed_params}
+    if route_table_params:
+        output_lines.append(f"\nRoute Tables:")
+        output_lines.append("-" * 40)
+        for param_key in sorted(route_table_params.keys()):
+            displayed_params.add(param_key)
+            value = route_table_params[param_key]
             if value is None or value == '':
                 output_lines.append(f"  {param_key:35} = <MISSING>")
             else:
@@ -402,7 +491,7 @@ def resolve_baseline_params(
     with later sources overriding earlier ones:
     
     1. Base CLI arguments
-    2. AWS infrastructure discovery (VPC, subnets, hosted zones)
+    2. AWS infrastructure discovery (VPC, subnets, route tables, hosted zones)
     3. Auto-generated values (BuildId from git)
     4. Core global stack outputs (us-east-1)
     5. Parent stack outputs (if specified)
@@ -466,8 +555,12 @@ def resolve_baseline_params(
     if vpc_id_for_subnets:
         subnet_data = get_subnet_data(aws_region, vpc_id_for_subnets)
         params.update(subnet_data)
+        
+        # Route table data
+        route_table_data = get_route_table_data(aws_region, vpc_id_for_subnets)
+        params.update(route_table_data)
     else:
-        print("Warning: VPCId not found in params, skipping subnet data retrieval.")
+        print("Warning: VPCId not found in params, skipping subnet and route table data retrieval.")
 
     # 3. Auto-generated values (BuildId from git)
     print("\n=== Phase 3: Auto-generated Values ===")
