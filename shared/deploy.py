@@ -379,6 +379,10 @@ def deploy(aws_account_id, aws_region, aws_cloudformation_file, deployment_name,
         
         print(f"S3 Bucket: s3://{s3_bucket_name}")
         
+        # Add deployment S3 bucket name to params
+        params["DeploymentS3BucketName"] = s3_bucket_name
+        print(f"Added parameter: DeploymentS3BucketName = {s3_bucket_name}")
+        
         for upload_spec in upload_specs:
             # Parse PARAM-KEY=filepath
             if '=' not in upload_spec:
@@ -640,6 +644,12 @@ if __name__ == "__main__":
     parser.add_argument("--upload", action='append', default=[], help="Upload file to S3 and pass S3 key as parameter in 'PARAM-KEY=filepath' format. Files are uploaded to s3://${AWS_ACCOUNT_ID}-{env_name_lower}-deployment/{BuildId}/{filename}. Can be specified multiple times.")
     
     args = parser.parse_args()
+    
+    # Validate that deployment-type is uppercase
+    if args.deployment_type != args.deployment_type.upper():
+        print(f"ERROR: deployment-type must be uppercase. Received: '{args.deployment_type}', Expected: '{args.deployment_type.upper()}'")
+        print("Please provide deployment-type in uppercase (e.g., SERVICE, JOB, VPC)")
+        exit(1)
     
     deploy(args.aws_account_id, 
            args.aws_region, 
