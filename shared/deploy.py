@@ -313,9 +313,23 @@ def get_stack_outputs(stack_region, project_name, environment_name, base_stack_n
     
     return retrieved_outputs
 
-def deploy(aws_account_id, aws_region, aws_cloudformation_file, deployment_name, deployment_type, environment_name, hosted_zone_suffix, project_name=None, build_id=None, parent_stacks_csv=None, cli_params_list=None):
+def deploy(aws_account_id, aws_region, aws_cloudformation_file, deployment_name, deployment_type, environment_name, hosted_zone_suffix, project_name=None, build_id=None, parent_stacks_csv=None, cli_params_list=None, upload_specs=None):
     print("Starting CloudFormation deployment process...")
-    print(f"Using AWS Account ID: {aws_account_id}")
+    
+    # Auto-detect AWS Account ID if not provided
+    if not aws_account_id:
+        print("AWS Account ID not provided, using get-caller-identity to detect...")
+        sts_client = boto3.client('sts', region_name=aws_region)
+        try:
+            caller_identity = sts_client.get_caller_identity()
+            aws_account_id = caller_identity['Account']
+            print(f"Auto-detected AWS Account ID: {aws_account_id}")
+        except Exception as e:
+            print(f"ERROR: Failed to auto-detect AWS Account ID: {e}")
+            raise
+    else:
+        print(f"Using provided AWS Account ID: {aws_account_id}")
+    
     print(f"Target AWS Region: {aws_region}")
     print(f"CloudFormation File: {aws_cloudformation_file}")
     print(f"Project Name: {project_name if project_name else '(not specified)'}")
@@ -341,6 +355,64 @@ def deploy(aws_account_id, aws_region, aws_cloudformation_file, deployment_name,
         print(f"Using provided BuildId: {build_id}")
     
     print(f"Initial parameters set: {params}")
+    
+    # Handle file uploads to S3
+    if upload_specs:
+        print("\n=== Processing File Uploads ===")
+        env_name_lower = environment_name.lower()
+        s3_bucket_name = f"{aws_account_id}-{env_name_lower}-deployment"
+        
+        # Ensure BuildId is set before uploads
+        if not build_id and "BuildId" not in params:
+            print("WARNING: BuildId not set yet, attempting to generate from git...")
+            try:
+                git_hash = subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD']).decode('utf-8').strip()
+                build_id = git_hash
+                params["BuildId"] = git_hash
+                print(f"Generated BuildId from git: {git_hash}")
+            except Exception as e:
+                print(f"ERROR: BuildId is required for file uploads but could not be determined: {e}")
+                raise RuntimeError("BuildId must be provided or git repository must be available for uploads")
+        
+        build_id_value = build_id or params.get("BuildId")
+        s3_client = boto3.client('s3', region_name=aws_region)
+        
+        print(f"S3 Bucket: s3://{s3_bucket_name}")
+        
+        for upload_spec in upload_specs:
+            # Parse PARAM-KEY=filepath
+            if '=' not in upload_spec:
+                print(f"ERROR: Invalid upload format '{upload_spec}'. Expected: PARAM-KEY=filepath")
+                raise ValueError(f"Invalid upload format: {upload_spec}")
+            
+            param_key, file_path = upload_spec.split('=', 1)
+            
+            # Check if file exists
+            if not os.path.isfile(file_path):
+                print(f"ERROR: File not found: {file_path}")
+                raise FileNotFoundError(f"Upload file not found: {file_path}")
+            
+            # Get filename
+            filename = os.path.basename(file_path)
+            
+            # Build S3 key
+            s3_key = f"{build_id_value}/{filename}"
+            
+            print(f"Uploading {file_path} to s3://{s3_bucket_name}/{s3_key}...")
+            
+            try:
+                s3_client.upload_file(file_path, s3_bucket_name, s3_key)
+                print(f"Successfully uploaded file. S3 key: {s3_key}")
+                
+                # Add S3 key to params
+                params[param_key] = s3_key
+                print(f"Added parameter: {param_key} = {s3_key}")
+                
+            except Exception as e:
+                print(f"ERROR: Failed to upload {file_path} to S3: {e}")
+                raise
+        
+        print("All files uploaded successfully")
 
     print("\n=== Fetching VPC Data ===")
     vpc_data = get_vpc_data(aws_region, environment_name)
@@ -554,7 +626,7 @@ def deploy(aws_account_id, aws_region, aws_cloudformation_file, deployment_name,
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Deploy AWS CloudFormation stacks.")
     
-    parser.add_argument("--aws-account-id", required=True, help="Your AWS Account ID.")
+    parser.add_argument("--aws-account-id", required=False, help="Your AWS Account ID. If not provided, will be auto-detected using get-caller-identity.")
     parser.add_argument("--aws-region", required=True, help="The AWS region for deployment (e.g., us-east-1).")
     parser.add_argument("--aws-cloudformation-file", required=True, help="Path to the CloudFormation template file.")
     parser.add_argument("--project-name", required=False, help="The name of the project (optional). If not provided, stack names will be {ENV}-{TYPE}-{NAME} instead of {PROJECT}-{ENV}-{TYPE}-{NAME}.")
@@ -565,6 +637,7 @@ if __name__ == "__main__":
     parser.add_argument("--build-id", required=False, help="Build ID to use for deployment (optional). If not provided, will be auto-generated from git commit hash.")
     parser.add_argument("--parent-stacks", required=False, help="Comma-separated parent stack names with optional region (e.g., 'CORE-global@us-east-1,CORE-vpc,CORE-network@eu-west-1'). Region defaults to --region if not specified.")
     parser.add_argument("--param", action='append', default=[], help="Additional parameters to pass directly to CloudFormation in 'KEY=VALUE' format. Can be specified multiple times. These override other gathered parameters if keys conflict.")
+    parser.add_argument("--upload", action='append', default=[], help="Upload file to S3 and pass S3 key as parameter in 'PARAM-KEY=filepath' format. Files are uploaded to s3://${AWS_ACCOUNT_ID}-{env_name_lower}-deployment/{BuildId}/{filename}. Can be specified multiple times.")
     
     args = parser.parse_args()
     
@@ -578,4 +651,5 @@ if __name__ == "__main__":
            args.project_name,
            args.build_id,
            args.parent_stacks,
-           args.param)
+           args.param,
+           args.upload)
