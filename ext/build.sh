@@ -2,9 +2,8 @@
 
 set -eou pipefail
 
-export PROJECT_NAME=$1
-export SERVICE_NAME=$2
-export ENV_NAME_UPPER=$3
+export RESOURCE_NAME=$1
+export ENV_NAME_UPPER=$2
 
 SESSION_TOKEN=$(curl -s \
 	          -X PUT "http://169.254.169.254/latest/api/token"\
@@ -30,7 +29,7 @@ export DOCKER_BUILDKIT=1
 export LATEST_IMAGE="$(aws ec2 describe-images \
                           --owners self --no-paginate  \
 			  | jq -r '.Images[].Name' \
-			  | grep build-${PROJECT_NAME}-${SERVICE_NAME}  \
+			  | grep build-${RESOURCE_NAME}  \
 			  | sort | tail -1)"
 
 echo "Last image found: $LATEST_IMAGE"
@@ -64,13 +63,13 @@ docker build --progress=plain \
 	     --build-arg AWS_REGION="${AWS_DEFAULT_REGION}" \
       	     --build-arg AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION}" \
 	     --build-arg DOCKER_REGISTRY_URL="${DOCKER_REGISTRY_URL:-docker.io}" \
-             --build-arg PROJECT_NAME="${PROJECT_NAME}" \
+             --build-arg RESOURCE_NAME="${RESOURCE_NAME}" \
              ${arg_http_proxy} \
 	     ${arg_https_proxy} \
 	     ${arg_no_proxy} \
 	     ${arg_HTTP_PROXY} \
       	     ${arg_HTTPS_PROXY} \
 	     ${arg_NO_PROXY} \
-	     -t ${PROJECT_NAME}-${SERVICE_NAME}:b${BUILD_ID} \
+	     -t ${RESOURCE_NAME}:b${BUILD_ID} \
 	     -f Dockerfile .
 

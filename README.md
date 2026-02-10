@@ -197,7 +197,7 @@ python shared/render.py \
     --template-file path/to/your/template.j2 \
     --output-file path/to/your/output.yaml \
     --aws-region us-east-1 \
-    --project-name MyProject \
+    --resource-name MyResource \
     --environment-name dev \
     --parent-stacks "CORE-global@us-east-1,vpc-main" \
     --stack-params-whitelist "VpcId,PublicSubnetIds,PrivateHostedZoneId" \
@@ -209,7 +209,7 @@ python shared/render.py \
 *   `--template-file`: Path to the Jinja2 template.
 *   `--output-file`: Path where the rendered output will be saved.
 *   `--aws-region`: AWS region for fetching parent stack outputs.
-*   `--project-name`: Project name, used in constructing parent stack names.
+*   `--resource-name`: Resource name, used in constructing parent stack names.
 *   `--environment-name`: Environment name (e.g., dev, prod), used in constructing parent stack names.
 *   `--parent-stacks`: (Optional) Comma-separated parent stack names with optional region (e.g., 'CORE-global@us-east-1,CORE-vpc,CORE-network@eu-west-1'). Region defaults to --region if not specified.
 *   `--stack-params-whitelist`: (Optional) Comma-separated list of parameter keys. If provided, only these specified keys will be included from the `--parent-stacks` outputs into the `web_config`.
@@ -226,7 +226,7 @@ python shared/deploy.py \
     --aws-account-id "123456789012" \
     --aws-region "us-east-1" \
     --aws-cloudformation-file "path/to/your/cloudformation.yaml" \
-    --project-name "MyProject" \
+    --resource-name "MyResource" \
     --deployment-name "my-service" \
     --deployment-type "service" \
     --environment-name "dev" \
@@ -240,7 +240,7 @@ python shared/deploy.py \
 *   `--aws-account-id`: Your AWS Account ID.
 *   `--aws-region`: The AWS region for deployment.
 *   `--aws-cloudformation-file`: Path to the CloudFormation template file.
-*   `--project-name`: The name of the project.
+*   `--resource-name`: The name of the resource.
 *   `--deployment-name`: The name for this specific deployment (e.g., a service name).
 *   `--deployment-type`: The type of deployment (e.g., service, job, vpc).
 *   `--environment-name`: The name of the environment (e.g., dev, staging, prod).

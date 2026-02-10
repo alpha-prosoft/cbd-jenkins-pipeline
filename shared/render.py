@@ -45,12 +45,12 @@ def parse_params(param_list):
                 print(f"Warning: Parameter '{item}' is not in 'key=value' format and will be ignored.")
     return params_dict
 
-def get_initial_web_config_from_stacks(aws_region, environment_name, parent_stacks_csv, project_name=None, stack_params_whitelist_csv=None):
+def get_initial_web_config_from_stacks(aws_region, environment_name, parent_stacks_csv, resource_name=None, stack_params_whitelist_csv=None):
     """
     Fetches outputs from specified CloudFormation parent stacks and returns them as a dictionary.
     Filters outputs based on stack_params_whitelist_csv if provided.
-    Stack names are constructed as: {PROJECT_NAME.upper()}-{ENVIRONMENT_NAME.upper()}-{base_stack_name} (if project_name provided)
-    or {ENVIRONMENT_NAME.upper()}-{base_stack_name} (if project_name is None)
+    Stack names are constructed as: {RESOURCE_NAME.upper()}-{ENVIRONMENT_NAME.upper()}-{base_stack_name} (if resource_name provided)
+    or {ENVIRONMENT_NAME.upper()}-{base_stack_name} (if resource_name is None)
     
     Supports per-stack region specification using {stack}@{region} format.
     """
@@ -82,10 +82,10 @@ def get_initial_web_config_from_stacks(aws_region, environment_name, parent_stac
                     stack_region = aws_region  # Default to deployment region
                 
                 try:
-                    outputs = get_stack_outputs(stack_region, project_name, environment_name, base_stack_name)
+                    outputs = get_stack_outputs(stack_region, resource_name, environment_name, base_stack_name)
                     if outputs:
-                        if project_name:
-                            full_stack_name_for_log = f"{project_name.upper()}-{environment_name.upper()}-{base_stack_name}"
+                        if resource_name:
+                            full_stack_name_for_log = f"{resource_name.upper()}-{environment_name.upper()}-{base_stack_name}"
                         else:
                             full_stack_name_for_log = f"{environment_name.upper()}-{base_stack_name}"
                         if whitelist:
@@ -99,8 +99,8 @@ def get_initial_web_config_from_stacks(aws_region, environment_name, parent_stac
                             print(f"Adding outputs from parent stack '{full_stack_name_for_log}': {outputs}")
                             initial_web_config.update(outputs)
                     else:
-                        if project_name:
-                            stack_name_for_log = f"{project_name.upper()}-{environment_name.upper()}-{base_stack_name}"
+                        if resource_name:
+                            stack_name_for_log = f"{resource_name.upper()}-{environment_name.upper()}-{base_stack_name}"
                         else:
                             stack_name_for_log = f"{environment_name.upper()}-{base_stack_name}"
                         print(f"No outputs found or retrieved for parent stack '{stack_name_for_log}'.")
@@ -121,9 +121,9 @@ def main():
     parser.add_argument("--aws-region",
                         required=True,
                         help="AWS region for fetching stack outputs.")
-    parser.add_argument("--project-name",
+    parser.add_argument("--resource-name",
                         required=False,
-                        help="Project name for constructing stack names (optional). If not provided, stack names will be {ENV}-{STACK}.")
+                        help="Resource name for constructing stack names (optional). If not provided, stack names will be {ENV}-{STACK}.")
     parser.add_argument("--environment-name",
                         required=True,
                         help="Environment name for constructing stack names.")
@@ -144,7 +144,7 @@ def main():
         args.aws_region, 
         args.environment_name, 
         args.parent_stacks,
-        args.project_name,
+        args.resource_name,
         args.stack_params_whitelist
     )
 

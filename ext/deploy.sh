@@ -21,6 +21,17 @@ done
 echo "Role ${ROLE:-}"
 echo "Tags ${TAGS:-}"
 
+# Safeguard: fail if legacy variables are set
+if [[ ! -z "${SERVICE_NAME:-}" ]]; then
+  echo "ERROR: SERVICE_NAME is set but no longer supported. Use RESOURCE_NAME instead."
+  exit 1
+fi
+
+if [[ ! -z "${PROJECT_NAME:-}" ]]; then
+  echo "ERROR: PROJECT_NAME is set but no longer supported. Use RESOURCE_NAME instead."
+  exit 1
+fi
+
 echo "Current environment (secrets masked)"
 env | grep -vE '(SECRET|TOKEN|PASSWORD|KEY)' | sort
 
@@ -40,17 +51,13 @@ echo "Prepare request directory"
 export work_dir="/dist/${BUILD_ID}"
 mkdir -p $work_dir
 
-if [[ ! -z "${SERVICE_NAME:-}" ]]; then
-  export ServiceName="${SERVICE_NAME}"
-fi
-
-if [[ ! -z "${PROJECT_NAME:-}" ]]; then
-  export ProjectName="${PROJECT_NAME}"
+if [[ ! -z "${RESOURCE_NAME:-}" ]]; then
+  export ResourceName="${RESOURCE_NAME}"
 fi
 
 # Validate required variables
-if [[ -z "${ServiceName:-}" ]]; then
-  echo "ERROR: ServiceName is not set. Please set SERVICE_NAME environment variable."
+if [[ -z "${ResourceName:-}" ]]; then
+  echo "ERROR: ResourceName is not set. Please set RESOURCE_NAME environment variable."
   exit 1
 fi
 
@@ -69,7 +76,7 @@ if [[ -z "${EnvironmentNameUpper:-}" ]]; then
   exit 1
 fi
 
-echo "Building ${ProjectName}/${ServiceName}"
+echo "Building ${ResourceName}"
 
 echo "We are running inside ${work_dir}"
 
@@ -97,7 +104,7 @@ echo "AWS Region: ${AWS_DEFAULT_REGION}"
 echo "Assuming role in target account"
 SESSION=$(aws sts assume-role \
   --role-arn arn:aws:iam::${TargetAccountId}:role/DeliveryRole \
-  --role-session-name "${ServiceName}-deployment-${BUILD_ID}" \
+  --role-session-name "${ResourceName}-deployment-${BUILD_ID}" \
   --endpoint https://sts.${AWS_DEFAULT_REGION}.amazonaws.com \
   --region ${AWS_DEFAULT_REGION})
 
@@ -168,9 +175,9 @@ PARAMS_ARGS=(
   --quiet
 )
 
-# Add project name if specified
-if [[ ! -z "${ProjectName:-}" ]]; then
-  PARAMS_ARGS+=(--project-name "${ProjectName}")
+# Add resource name if specified
+if [[ ! -z "${ResourceName:-}" ]]; then
+  PARAMS_ARGS+=(--resource-name "${ResourceName}")
 fi
 
 # Add parent stacks if specified
@@ -182,7 +189,7 @@ fi
 PARAMS_ARGS+=(
   --param "BuildId=${BUILD_ID}"
   --param "Version=${BUILD_ID}"
-  --param "ServiceName=${ServiceName}"
+  --param "ResourceName=${ResourceName}"
 )
 
 # Call params.py to resolve all infrastructure parameters
@@ -230,24 +237,24 @@ pipeline_access=$(jq -n \
   --arg secretAccessKey "${PIPELINE_AWS_SECRET_ACCESS_KEY}" \
   --arg region "${AWS_DEFAULT_REGION}" \
   --arg accountId "${PIPELINE_ACCOUNT_ID}" \
-  --arg serviceName "${ServiceName}" \
+  --arg resourceName "${ResourceName}" \
   '{
     "AWS_ACCESS_KEY_ID": $accessKeyId,
     "AWS_SESSION_TOKEN": $sessionToken,
     "AWS_SECRET_ACCESS_KEY": $secretAccessKey,
     "AWS_DEFAULT_REGION": $region,
     "AccountId": $accountId,
-    "ServiceName": $serviceName
+    "ResourceName": $resourceName
   }')
 
 # Build resource tags
 resource_tags=$(jq -n \
-  --arg serviceName "${ServiceName}" \
+  --arg resourceName "${ResourceName}" \
   --arg envNameLower "${EnvironmentNameUpper,,}" \
   --arg buildId "${BUILD_ID}" \
   --arg version "${BUILD_ID}" \
   '{
-    "ServiceName": $serviceName,
+    "ResourceName": $resourceName,
     "EnvironmentNameLower": $envNameLower,
     "BuildId": $buildId,
     "Version": $version

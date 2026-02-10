@@ -80,7 +80,7 @@ graph LR
 2. **Parent Stack Outputs** (from specified parent stacks with optional per-stack regions)
 3. **Auto-generated Values** (BuildId from git)
 4. **AWS Infrastructure Discovery** (VPC, Subnets, Hosted Zones)
-5. **Base CLI Arguments** (AccountId, Region, ProjectName, etc.)
+5. **Base CLI Arguments** (AccountId, Region, ResourceName, etc.)
 
 ---
 
@@ -88,7 +88,7 @@ graph LR
 
 | Source | Examples | When Applied | Can Override |
 |--------|----------|--------------|--------------|
-| **CLI Arguments** | `AccountId`, `Region`, `ProjectName`, `EnvironmentName` | Always (required) | No (base values) |
+| **CLI Arguments** | `AccountId`, `Region`, `ResourceName`, `EnvironmentName` | Always (required) | No (base values) |
 | **AWS Discovery** | `VPCId`, `VPCCidr`, Subnet IDs by name, `PrivateHostedZoneId`, `PublicHostedZoneId` | When AWS resources exist | No |
 | **Auto-generated** | `BuildId` (from git hash) | If not already in params | AWS Discovery |
 | **Parent Stacks** | Stack-specific outputs (e.g., network configs, database endpoints). Supports per-stack region via `{stack}@{region}` format. | If `--parent-stacks` specified | Auto-generated |
@@ -124,9 +124,9 @@ graph LR
 - If git fails: Logs warning, continues without BuildId
 
 ### 5. Stack Name Construction
-- Format: `{PROJECT}-{ENV}-{STACK_NAME}`
+- Format: `{RESOURCE}-{ENV}-{STACK_NAME}`
 - All uppercase, underscores replaced with hyphens
-- Example: `MYPROJECT-DEV-CORE-global`
+- Example: `MYRESOURCE-DEV-CORE-global`
 - Note: `params.py` does NOT construct stack names, only returns parameters
 
 ### 6. Parent Stacks Region Specification
@@ -184,7 +184,7 @@ sequenceDiagram
 python shared/params.py \
   --aws-account-id 123456789012 \
   --aws-region us-east-1 \
-  --project-name myapp \
+  --resource-name myapp \
   --environment-name dev \
   --hosted-zone example.com
 ```
@@ -194,7 +194,7 @@ python shared/params.py \
 {
   "AccountId": "123456789012",
   "Region": "us-east-1",
-  "ProjectName": "myapp",
+  "ResourceName": "myapp",
   "EnvironmentNameLower": "dev",
   "EnvironmentNameUpper": "DEV",
   "VPCId": "vpc-abc123",
@@ -214,7 +214,7 @@ python shared/params.py \
 python shared/params.py \
   --aws-account-id 123456789012 \
   --aws-region us-east-1 \
-  --project-name myapp \
+  --resource-name myapp \
   --environment-name dev \
   --hosted-zone example.com \
   --parent-stacks CORE-global@us-east-1,CORE-vpc,CORE-database
@@ -236,7 +236,7 @@ python shared/params.py \
 python shared/params.py \
   --aws-account-id 123456789012 \
   --aws-region us-east-1 \
-  --project-name myapp \
+  --resource-name myapp \
   --environment-name dev \
   --hosted-zone example.com \
   --param BuildId=custom-build-123 \
@@ -257,7 +257,7 @@ python shared/params.py \
 python shared/params.py \
   --aws-account-id 123456789012 \
   --aws-region eu-west-1 \
-  --project-name myapp \
+  --resource-name myapp \
   --environment-name prod \
   --hosted-zone example.com \
   --parent-stacks CORE-global@us-east-1,CORE-vpc,CORE-cdn@us-east-1
@@ -313,7 +313,7 @@ python shared/render.py \
   --template-file template.yaml \
   --output-file rendered.yaml \
   --aws-region us-east-1 \
-  --project-name myapp \
+  --resource-name myapp \
   --environment-name dev \
   --parent-stacks CORE-global \
   --param $(jq -r 'to_entries[] | "--param \(.key)=\(.value)"' /tmp/params.json)

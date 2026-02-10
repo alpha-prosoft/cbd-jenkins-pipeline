@@ -6,7 +6,7 @@ This module provides standalone parameter resolution for CloudFormation deployme
 It can be used both as a CLI tool and as an importable module.
 
 Parameter Resolution Order (later sources override earlier ones):
-1. Base CLI arguments (AccountId, Region, ProjectName, etc.)
+1. Base CLI arguments (AccountId, Region, ResourceName, etc.)
 2. AWS infrastructure discovery (VPC, subnets, route tables, hosted zones)
 3. Auto-generated values (BuildId from git)
 4. Core global stack outputs (us-east-1)
@@ -293,25 +293,25 @@ def get_route_table_data(aws_region, vpc_id):
     return route_table_params
 
 
-def get_stack_outputs(stack_region, project_name, environment_name, base_stack_name):
+def get_stack_outputs(stack_region, resource_name, environment_name, base_stack_name):
     """
     Retrieves outputs from a CloudFormation stack.
     
-    Constructs the full stack name as: {PROJECT}-{ENV}-{BASE_STACK_NAME} (if project_name provided)
-    or {ENV}-{BASE_STACK_NAME} (if project_name is None)
+    Constructs the full stack name as: {RESOURCE}-{ENV}-{BASE_STACK_NAME} (if resource_name provided)
+    or {ENV}-{BASE_STACK_NAME} (if resource_name is None)
     and fetches all outputs from that stack.
     
     Args:
         stack_region: AWS region where the stack exists (per-stack)
-        project_name: Project name (converted to uppercase), optional - if None, omitted from stack name
+        resource_name: Resource name (converted to uppercase), optional - if None, omitted from stack name
         environment_name: Environment name (converted to uppercase)
         base_stack_name: Base stack name (e.g., "CORE-global", "vpc-setup")
         
     Returns:
         dict: {output_key: output_value, ...}
     """
-    if project_name:
-        actual_stack_name = f"{project_name.upper()}-{environment_name.upper()}-{base_stack_name}".replace('_', '-')
+    if resource_name:
+        actual_stack_name = f"{resource_name.upper()}-{environment_name.upper()}-{base_stack_name}".replace('_', '-')
     else:
         actual_stack_name = f"{environment_name.upper()}-{base_stack_name}".replace('_', '-')
     
@@ -480,7 +480,7 @@ def resolve_baseline_params(
     aws_region,
     environment_name,
     hosted_zone_suffix,
-    project_name=None,
+    resource_name=None,
     parent_stacks_csv=None,
     cli_params_list=None
 ):
@@ -502,7 +502,7 @@ def resolve_baseline_params(
         aws_region: AWS region for deployment
         environment_name: Environment name (e.g., dev, prod)
         hosted_zone_suffix: Hosted zone suffix to search for (e.g., "example.com")
-        project_name: Project name (optional) - if not provided, stack names will be {ENV}-{STACK} instead of {PROJECT}-{ENV}-{STACK}
+        resource_name: Resource name (optional) - if not provided, stack names will be {ENV}-{STACK} instead of {RESOURCE}-{ENV}-{STACK}
         parent_stacks_csv: Comma-separated parent stack base names (optional)
         cli_params_list: List of 'KEY=VALUE' strings for overrides (optional)
         
@@ -515,7 +515,7 @@ def resolve_baseline_params(
             aws_region="us-east-1",
             environment_name="dev",
             hosted_zone_suffix="example.com",
-            project_name="myproject",
+            resource_name="myresource",
             parent_stacks_csv="CORE-vpc,CORE-network",
             cli_params_list=["BuildId=custom-123", "CustomParam=value"]
         )
@@ -523,7 +523,7 @@ def resolve_baseline_params(
     print("Starting parameter resolution process...")
     print(f"AWS Account ID: {aws_account_id}")
     print(f"AWS Region: {aws_region}")
-    print(f"Project Name: {project_name if project_name else '(not specified)'}")
+    print(f"Resource Name: {resource_name if resource_name else '(not specified)'}")
     print(f"Environment Name: {environment_name}")
     print(f"Hosted Zone Suffix: {hosted_zone_suffix}")
 
@@ -535,8 +535,8 @@ def resolve_baseline_params(
         "EnvironmentNameLower": environment_name.lower(),
         "EnvironmentNameUpper": environment_name.upper()
     }
-    if project_name:
-        params["ProjectName"] = project_name
+    if resource_name:
+        params["ResourceName"] = resource_name
     print(f"Base parameters: {params}")
 
     # 2. AWS infrastructure discovery
@@ -590,8 +590,8 @@ def resolve_baseline_params(
                     parent_stack_base_name = parent_entry
                     stack_region = aws_region  # Default to deployment region
                 
-                if project_name:
-                    full_parent_stack_name = f"{project_name.upper()}-{environment_name.upper()}-{parent_stack_base_name}".replace('_', '-')
+                if resource_name:
+                    full_parent_stack_name = f"{resource_name.upper()}-{environment_name.upper()}-{parent_stack_base_name}".replace('_', '-')
                 else:
                     full_parent_stack_name = f"{environment_name.upper()}-{parent_stack_base_name}".replace('_', '-')
                 
@@ -600,7 +600,7 @@ def resolve_baseline_params(
                 print(f"  Base stack name: {parent_stack_base_name}")
                 print(f"  Target region: {stack_region}")
                 
-                parent_outputs = get_stack_outputs(stack_region, project_name, environment_name, parent_stack_base_name)
+                parent_outputs = get_stack_outputs(stack_region, resource_name, environment_name, parent_stack_base_name)
                 
                 if parent_outputs:
                     print(f"Successfully retrieved {len(parent_outputs)} output(s) from parent stack {full_parent_stack_name}")
@@ -639,7 +639,7 @@ def resolve_baseline_params(
     
     # Track parameter categories for better organization
     param_metadata = {
-        'base': ['AccountId', 'Region', 'ProjectName', 'EnvironmentNameLower', 'EnvironmentNameUpper'],
+        'base': ['AccountId', 'Region', 'ResourceName', 'EnvironmentNameLower', 'EnvironmentNameUpper'],
         'vpc': ['VPCId', 'VPCCidr'],
         'hosted_zones': ['PublicHostedZoneName', 'PublicHostedZoneId', 'PrivateHostedZoneName', 'PrivateHostedZoneId'],
         'build': ['BuildId']
@@ -667,7 +667,7 @@ Examples:
   python scripts/params.py \\
     --aws-account-id 123456789012 \\
     --aws-region us-east-1 \\
-    --project-name myproject \\
+    --resource-name myresource \\
     --environment-name dev \\
     --hosted-zone example.com
 
@@ -675,7 +675,7 @@ Examples:
   python scripts/params.py \\
     --aws-account-id 123456789012 \\
     --aws-region us-east-1 \\
-    --project-name myproject \\
+    --resource-name myresource \\
     --environment-name dev \\
     --hosted-zone example.com \\
     --output json
@@ -684,7 +684,7 @@ Examples:
   python scripts/params.py \\
     --aws-account-id 123456789012 \\
     --aws-region us-east-1 \\
-    --project-name myproject \\
+    --resource-name myresource \\
     --environment-name dev \\
     --hosted-zone example.com \\
     --output text
@@ -693,14 +693,14 @@ Examples:
   python scripts/params.py \\
     --aws-account-id 123456789012 \\
     --aws-region us-east-1 \\
-    --project-name myproject \\
+    --resource-name myresource \\
     --environment-name dev \\
     --hosted-zone example.com \\
     --parent-stacks CORE-global@us-east-1,CORE-vpc,CORE-network \\
     --param BuildId=custom-123 \\
     --param CustomParam=value
 
-  # Without project name (stack names will be {ENV}-{STACK})
+  # Without resource name (stack names will be {ENV}-{STACK})
   python scripts/params.py \\
     --aws-account-id 123456789012 \\
     --aws-region us-east-1 \\
@@ -712,7 +712,7 @@ Examples:
   python scripts/params.py \\
     --aws-account-id 123456789012 \\
     --aws-region us-east-1 \\
-    --project-name myproject \\
+    --resource-name myresource \\
     --environment-name dev \\
     --hosted-zone example.com \\
     --output json \\
@@ -728,10 +728,10 @@ Examples:
                         required=True,
                         metavar='REGION',
                         help="AWS region (e.g., us-east-1)")
-    parser.add_argument("--project-name", 
+    parser.add_argument("--resource-name", 
                         required=False,
-                        metavar='PROJECT',
-                        help="Project name (optional). If not provided, stack names will be {ENV}-{STACK} instead of {PROJECT}-{ENV}-{STACK}")
+                        metavar='RESOURCE',
+                        help="Resource name (optional). If not provided, stack names will be {ENV}-{STACK} instead of {RESOURCE}-{ENV}-{STACK}")
     parser.add_argument("--environment-name", 
                         required=True,
                         metavar='ENVIRONMENT',
@@ -785,7 +785,7 @@ Examples:
             aws_region=args.aws_region,
             environment_name=args.environment_name,
             hosted_zone_suffix=args.hosted_zone,
-            project_name=args.project_name,
+            resource_name=args.resource_name,
             parent_stacks_csv=args.parent_stacks,
             cli_params_list=args.param if args.param else None
         )
