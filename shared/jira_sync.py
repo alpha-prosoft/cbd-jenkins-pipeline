@@ -82,6 +82,32 @@ def _jira_request(url, user, password, method="GET", data=None):
 # Core logic
 # ---------------------------------------------------------------------------
 
+def _transition_issue(jira_url, user, password, jira_issue, target_status):
+    """
+    Transition a JIRA issue to the given target status (e.g. "In Progress", "Done").
+
+    Returns True on success, raises on failure.
+    """
+    transitions_url = "{}/rest/api/2/issue/{}/transitions".format(jira_url, jira_issue)
+
+    log.info("Fetching available transitions for %s", jira_issue)
+    data = _jira_request(transitions_url, user, password)
+    transitions = data.get("transitions", [])
+
+    target = next((t for t in transitions if t.get("name") == target_status), None)
+    if target is None:
+        available = [t.get("name") for t in transitions]
+        raise RuntimeError(
+            "No '{}' transition found for {}. Available: {}".format(
+                target_status, jira_issue, available))
+
+    log.info("Executing transition '%s' (id=%s) for %s", target_status, target["id"], jira_issue)
+    payload = {"transition": {"id": target["id"]}}
+    _jira_request(transitions_url, user, password, method="POST", data=payload)
+    log.info("Successfully transitioned %s to '%s'.", jira_issue, target_status)
+    return True
+
+
 def _parse_gerrit_message(raw_message, jira_issue):
     """
     Split a Gerrit commit message into a summary and description.
@@ -110,9 +136,13 @@ def cmd_check(args):
     """
     Validate JIRA ticket state and sync commit message -> JIRA fields.
 
+    If the ticket is in a "Created" / "To Do" / "Open" state, it will be
+    automatically transitioned to "In Progress".  The build only fails if
+    the transition itself fails (e.g. missing transition, permission error).
+
     Exit codes:
       0  - success (ticket is valid, fields updated if needed)
-      1  - error (ticket not in correct state, API failure, etc.)
+      1  - error (transition failed, API failure, etc.)
     """
     jira_url = args.jira_url.rstrip("/")
     issue_url = "{}/rest/api/2/issue/{}".format(jira_url, args.jira_issue)
@@ -139,10 +169,22 @@ def cmd_check(args):
 
     log.info("JIRA %s  status=%s  type=%s", args.jira_issue, status_name, issue_type)
 
-    # -- Validate status -------------------------------------------------
-    if status_name != "In Progress":
+    # -- Validate / fix status -------------------------------------------
+    if status_name == "In Progress":
+        log.info("JIRA issue %s is already 'In Progress'.", args.jira_issue)
+    elif status_name in ("Created", "To Do", "Open"):
+        log.info("JIRA issue %s is '%s' - attempting to move to 'In Progress'.",
+                 args.jira_issue, status_name)
+        try:
+            _transition_issue(jira_url, args.jira_user, args.jira_password,
+                              args.jira_issue, "In Progress")
+        except Exception as exc:
+            log.error("Failed to transition %s from '%s' to 'In Progress': %s",
+                      args.jira_issue, status_name, exc)
+            return 1
+    else:
         log.error(
-            "JIRA issue %s must be 'In Progress' but is '%s'. URL: %s",
+            "JIRA issue %s is '%s' - cannot auto-transition to 'In Progress'. URL: %s",
             args.jira_issue, status_name, issue_url,
         )
         return 1
@@ -203,39 +245,14 @@ def cmd_close(args):
       1  - error (transition not found, API failure, etc.)
     """
     jira_url = args.jira_url.rstrip("/")
-    transitions_url = "{}/rest/api/2/issue/{}/transitions".format(jira_url, args.jira_issue)
 
-    # -- Fetch available transitions -------------------------------------
-    log.info("Fetching transitions for %s", args.jira_issue)
     try:
-        data = _jira_request(transitions_url, args.jira_user, args.jira_password)
-    except Exception:
-        log.error("Failed to fetch transitions for %s", args.jira_issue)
+        _transition_issue(jira_url, args.jira_user, args.jira_password,
+                          args.jira_issue, "Done")
+    except Exception as exc:
+        log.error("Failed to close %s: %s", args.jira_issue, exc)
         return 1
 
-    transitions = data.get("transitions", [])
-    done_transition = next((t for t in transitions if t.get("name") == "Done"), None)
-
-    if done_transition is None:
-        available = [t.get("name") for t in transitions]
-        log.error(
-            "No 'Done' transition found for %s. Available transitions: %s",
-            args.jira_issue, available,
-        )
-        return 1
-
-    done_id = done_transition["id"]
-    log.info("Found 'Done' transition (id=%s) for %s", done_id, args.jira_issue)
-
-    # -- Execute transition -----------------------------------------------
-    payload = {"transition": {"id": done_id}}
-    try:
-        _jira_request(transitions_url, args.jira_user, args.jira_password, method="POST", data=payload)
-    except Exception:
-        log.error("Failed to transition %s to Done", args.jira_issue)
-        return 1
-
-    log.info("JIRA issue %s transitioned to Done.", args.jira_issue)
     return 0
 
 
