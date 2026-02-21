@@ -1,25 +1,19 @@
 def getJiraIssue() {
     echo "Getting jira issue from commit message"
-    
+
     // Check if GERRIT_CHANGE_SUBJECT is set
     if (!env.GERRIT_CHANGE_SUBJECT) {
         echo "INFO: GERRIT_CHANGE_SUBJECT not set, skipping JIRA extraction"
         return null
     }
-    
-    try {
-        def response = sh(label: "Extract jira issue", returnStdout: true, script: """#!/bin/bash 
-            JIRA_PATTERN="^\\[[a-zA-Z0-9,\\.\\_\\-]+-[0-9]+\\]"
-            JIRA_ISSUE="\$(echo "${env.GERRIT_CHANGE_SUBJECT}" | grep -o -E "\${JIRA_PATTERN}" | sed 's/^\\[\\(.*\\)\\]\$/\\1/')"
-            if [ -z "\${JIRA_ISSUE}" ] ; then
-                        echo "ERROR: Pattern does not match. Please use [JIRA-123] syntax in commit messages"
-              exit 1
-            fi
-            echo "\${JIRA_ISSUE}"
-      """)
-        return response.trim();
-    } catch (Exception e) {
-        error "Error extracing JIRA: ${e.message}"
+
+    def matcher = (env.GERRIT_CHANGE_SUBJECT =~ /^\[([a-zA-Z0-9,._-]+-[0-9]+)\]/)
+    if (matcher.find()) {
+        def issue = matcher.group(1)
+        echo "INFO: Extracted JIRA issue: ${issue}"
+        return issue
+    } else {
+        error "ERROR: Pattern does not match. Please use [JIRA-123] syntax in commit messages"
     }
 }
 
@@ -85,106 +79,41 @@ def checkJira() {
             return true;
         }
 
-        String gerritMessage = sh(label: 'Check gerrit commit message', returnStdout: true, script: """#!/bin/bash
+        // Fetch commit message from Gerrit
+        String gerritMessage = sh(label: 'Fetch Gerrit commit message', returnStdout: true, script: """#!/bin/bash
+           set -eu
            output=\$(mktemp)
-           target_url="https://${GERRIT_URL}/a/changes/${GERRIT_CHANGE_ID}/revisions/${GERRIT_PATCHSET_REVISION}/commit" 
-           curl -b ~/.gitcookie --fail -v \$target_url -o \$output       
+           target_url="https://${GERRIT_URL}/a/changes/${GERRIT_CHANGE_ID}/revisions/${GERRIT_PATCHSET_REVISION}/commit"
+           curl -b ~/.gitcookie --fail -s \$target_url -o \$output
            tail -n +2 \$output | jq -r ".message"
-           """)
-        echo "Commit message ${gerritMessage}"
+           rm -f \$output
+           """).trim()
+        echo "INFO: Commit message: ${gerritMessage}"
 
         def jiraIssue = getJiraIssue()
-        echo "Checking JIRA: ${jiraIssue}"
+        echo "INFO: Checking JIRA: ${jiraIssue}"
         def jiraUrl = findUrlForTicket("${env.GLOBAL_JIRA_URL}", "${jiraIssue}")
-        echo "Jira url: ${jiraUrl}"
+        echo "INFO: Jira URL: ${jiraUrl}"
+
+        // Write commit message to a temp file to avoid shell escaping issues
+        writeFile file: '.gerrit_commit_msg.tmp', text: gerritMessage
 
         try {
-            def jiraStatus = sh(label: 'Check related Jira issue', returnStdout: true, script: """#!/bin/bash
-                set -eux pipefail
-    
-                update_issue() {
-                  JIRA_STATUS="\${1}"
-                  ISSUE_SUM="\$(echo "\${JIRA_STATUS}" | jq -r ".fields.summary")"
-                  ISSUE_DESC="\$(echo "\${JIRA_STATUS}" | jq -r ".fields.description")"
-                  ISSUE_TYPE="\$(echo "\${JIRA_STATUS}" | jq -r ".fields.issuetype.name")"
-                  GERRIT_MESSAGE="${gerritMessage}"
-    
-                  GERRIT_SUM_STEP1="\$(echo "\${GERRIT_MESSAGE/"[${jiraIssue}] "/}" | head -n 1)"
-                  GERRIT_SUM_STEP2="\${GERRIT_SUM_STEP1//\\'/\\\\u0027}"
-                  GERRIT_SUM="\${GERRIT_SUM_STEP2//\\"/\\\\\\"}"
-                  GERRIT_DESC_STEP1="\$(echo "\${GERRIT_MESSAGE}" | tail -n +2)"
-                  GERRIT_DESC_STEP2="\$(printf '%q' "\$GERRIT_DESC_STEP1")"
-                  GERRIT_DESC_STEP3="\${GERRIT_DESC_STEP2//\\"/\\\\\\"}"
-                  GERRIT_DESC_STEP4="\${GERRIT_DESC_STEP3#\\\$\\\'}"
-                  GERRIT_DESC_STEP5="\${GERRIT_DESC_STEP4%?}"
-                  GERRIT_DESC="\${GERRIT_DESC_STEP5//\\\\\\'/\\\\u0027}"
-                  CONT_TYPE="Content-Type:application/json"
-    
-                  if [ "\${ISSUE_TYPE^^}" == "BUG" ] || [ "\${ISSUE_TYPE^^}" ==  "STORY" ] ; then
-                    echo "INFO: Issue is a story or bug, skipping"
-                    exit 1
-                  elif [ "\${ISSUE_SUM}" !=  "\${GERRIT_SUM_STEP1}" ] && [ "\${ISSUE_DESC}" !=  "\${GERRIT_DESC_STEP1}" ] ; then
-                    echo "INFO: updating JIRA issue summary and description based on commit message."
-                    API_DATA='{ "fields": {"summary": "'"\${GERRIT_SUM}"'", "description": "'"\${GERRIT_DESC}"'" } }'
-                  elif [ "\${ISSUE_SUM}" !=  "\${GERRIT_SUM_STEP1}" ] ; then
-                    API_DATA='{ "fields": {"summary": "'"\${GERRIT_SUM}"'" } }'
-                    echo "INFO: updating JIRA issue summary based on commit message."
-                  elif [ "\${ISSUE_DESC}" !=  "\${GERRIT_DESC_STEP1}" ] ; then
-                    API_DATA='{ "fields": {"description": "'"\${GERRIT_DESC}"'" } }'
-                    echo "INFO: updating JIRA issue description based on commit message"
-                  else
-                    echo "INFO: Issue and commit message are the same, nothing to update"
-                    exit 0
-                  fi
-                  echo "\${API_DATA}"
-                  url="${jiraUrl}/rest/api/2/issue/${jiraIssue}"
-                  echo "Updating on URL: \${url}"
-                  curl -k -f -D- -u  "${JIRA_USER}:${JIRA_PW}" -X PUT --data "\${API_DATA}" -H "\${CONT_TYPE}" \${url}
-                }
-    
-                CHECK_GERRIT_BUILD="${env.GERRIT_CHANGE_SUBJECT}"
-                if [[ "\${CHECK_GERRIT_BUILD}" == null ]] ; then
-                  echo "INFO: skipping JIRA test"
-                  exit 0
-                fi
-                
-                url="${jiraUrl}/rest/api/2/issue/${jiraIssue}"
-                echo "Getting on URL: \${url}"
-
-                JIRA_STATUS="\$(curl -k -s -u ${JIRA_USER}:${JIRA_PW} \${url})"
-    
-                if get_status="\$(echo "\${JIRA_STATUS}" | jq -er ".fields.status.name")"; then
-                    if [ "\${get_status}" != "In Progress" ] ; then
-                      echo "ERROR: Related Jira Issue (\${JIRA_STATUS}) has to be In Progress, current status is \${get_status}, \${url}"
-                      exit 0
-                    else
-                      echo "INFO: Related Jira Issue (\${JIRA_STATUS}) status: \${get_status}"url
-                      update_issue "\${JIRA_STATUS}"
-                      exit 0
-                    fi
-                elif get_error="\$(echo "\${JIRA_STATUS}" | jq -er ".errorMessages[]")"; then
-                  echo "ERROR: Commit message error related to \${JIRA_STATUS}: \$get_error, \${url}"
-                  exit 0
-                else
-                  echo "ERROR: Unknown error during Jira issue , \${url}"
-                echo "Jira check is done!"
-                exit 0
-                fi
-                """).trim()
-
-            if (jiraStatus.contains("ERROR: Pattern")) {
-                sh(label: 'Jira ticket pattern does not match [JIRA-123]', script: "echo -e '\\e[31m${jiraStatus}\\e[0m' && exit 1")
-            } else if (jiraStatus.contains("ERROR: Related")) {
-                sh script: "echo -e '\\e[31m${jiraStatus}\\e[0m' && exit 1", label: 'Jira ticket not In-Progress state'
-            } else if (jiraStatus.contains("INFO: Related Jira Issue")) {
-                sh(label: 'Jira ticket OK', script: "echo '${jiraStatus}' && exit 0")
-            } else {
-                sh(label: 'Unknown jira error', script: "echo -e '\\e[31m${jiraStatus}\\e[0m' && exit 1")
-            }
+            sh(label: 'Check and sync JIRA issue', script: """#!/bin/bash
+                set -eu
+                python3 shared/jira_sync.py check \
+                    --jira-url '${jiraUrl}' \
+                    --jira-user '${JIRA_USER}' \
+                    --jira-password '${JIRA_PW}' \
+                    --jira-issue '${jiraIssue}' \
+                    --gerrit-message "\$(cat .gerrit_commit_msg.tmp)"
+                rm -f .gerrit_commit_msg.tmp
+                """)
         } catch (err) {
+            sh(script: "rm -f .gerrit_commit_msg.tmp", returnStatus: true)
             println "Jira check failed!"
             println "Error details: ${err.getMessage()}"
-            error("Jira Check script failed. See console for details.")
+            error("Jira Check failed. See console for details.")
         }
     }
 
@@ -195,31 +124,23 @@ def close() {
         echo "INFO: Skipping JIRA close - not a Gerrit build"
         return
     }
-    
+
     withCredentials([usernamePassword(credentialsId: 'jira-http', passwordVariable: 'JIRA_PW', usernameVariable: 'JIRA_USER')]) {
         def jiraIssue = getJiraIssue()
-        echo "Checking JIRA: ${jiraIssue}"
+        echo "INFO: Closing JIRA: ${jiraIssue}"
 
         def jiraUrl = findUrlForTicket("${env.GLOBAL_JIRA_URL}", "${jiraIssue}")
-        echo "Jira url: ${jiraUrl}"
+        echo "INFO: Jira URL: ${jiraUrl}"
 
-        sh(label: 'Close related Jira issue', script: """#!/bin/bash
-            set -xeu pipefail
-            CHECK_GERRIT_BUILD="${env.GERRIT_CHANGE_SUBJECT}"
-            if [[ "\${CHECK_GERRIT_BUILD}" == null ]] ; then
-              echo "INFO: skipping JIRA closing"
-              exit 0
-            fi
-            DONE_WORKFLOW_ID="\$(curl -k -s -u ${JIRA_USER}:${JIRA_PW} ${jiraUrl}/rest/api/2/issue/${jiraIssue}/transitions?transitionId | \
-            jq -re '.transitions[] | select(.name=="Done") | .id')"
-            curl -k -D- -u ${JIRA_USER}:${JIRA_PW} \
-                 -X POST \
-                 --data '{ "transition": { "id": '"\${DONE_WORKFLOW_ID}"' } }' \
-                  -H "Content-Type: application/json" \
-                  ${jiraUrl}/rest/api/2/issue/${jiraIssue}/transitions?transitionId
+        sh(label: 'Close JIRA issue', script: """#!/bin/bash
+            set -eu
+            python3 shared/jira_sync.py close \
+                --jira-url '${jiraUrl}' \
+                --jira-user '${JIRA_USER}' \
+                --jira-password '${JIRA_PW}' \
+                --jira-issue '${jiraIssue}'
           """)
     }
 }
 
 return this
-
