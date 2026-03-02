@@ -80,14 +80,14 @@ def checkJira() {
         }
 
         // Fetch commit message from Gerrit
-        String gerritMessage = sh(label: 'Fetch Gerrit commit message', returnStdout: true, script: """#!/bin/bash
+        String gerritMessage = sh(label: 'Fetch Gerrit commit message', returnStdout: true, script: '''#!/bin/bash
            set -eu
-           output=\$(mktemp)
+           output=$(mktemp)
            target_url="https://${GERRIT_URL}/a/changes/${GERRIT_CHANGE_ID}/revisions/${GERRIT_PATCHSET_REVISION}/commit"
-           curl -b ~/.gitcookie --fail -s \$target_url -o \$output
-           tail -n +2 \$output | jq -r ".message"
-           rm -f \$output
-           """).trim()
+           curl -b ~/.gitcookie --fail -s $target_url -o $output
+           tail -n +2 $output | jq -r ".message"
+           rm -f $output
+           ''').trim()
         echo "INFO: Commit message: ${gerritMessage}"
 
         def jiraIssue = getJiraIssue()
@@ -99,16 +99,18 @@ def checkJira() {
         writeFile file: '.gerrit_commit_msg.tmp', text: gerritMessage
 
         try {
-            sh(label: 'Check and sync JIRA issue', script: """#!/bin/bash
-                set -eu
-                python3 shared/jira_sync.py check \
-                    --jira-url '${jiraUrl}' \
-                    --jira-user '${JIRA_USER}' \
-                    --jira-password '${JIRA_PW}' \
-                    --jira-issue '${jiraIssue}' \
-                    --gerrit-message "\$(cat .gerrit_commit_msg.tmp)"
-                rm -f .gerrit_commit_msg.tmp
-                """)
+            withEnv(["JIRA_URL_PARAM=${jiraUrl}", "JIRA_ISSUE_PARAM=${jiraIssue}"]) {
+                sh(label: 'Check and sync JIRA issue', script: '''#!/bin/bash
+                    set -eu
+                    python3 "${WORKSPACE}/shared/jira_sync.py" check \
+                        --jira-url "$JIRA_URL_PARAM" \
+                        --jira-user "$JIRA_USER" \
+                        --jira-password "$JIRA_PW" \
+                        --jira-issue "$JIRA_ISSUE_PARAM" \
+                        --gerrit-message "$(cat .gerrit_commit_msg.tmp)"
+                    rm -f .gerrit_commit_msg.tmp
+                    ''')
+            }
         } catch (err) {
             sh(script: "rm -f .gerrit_commit_msg.tmp", returnStatus: true)
             println "Jira check failed!"
@@ -132,14 +134,25 @@ def close() {
         def jiraUrl = findUrlForTicket("${env.GLOBAL_JIRA_URL}", "${jiraIssue}")
         echo "INFO: Jira URL: ${jiraUrl}"
 
-        sh(label: 'Close JIRA issue', script: """#!/bin/bash
-            set -eu
-            python3 shared/jira_sync.py close \
-                --jira-url '${jiraUrl}' \
-                --jira-user '${JIRA_USER}' \
-                --jira-password '${JIRA_PW}' \
-                --jira-issue '${jiraIssue}'
-          """)
+        withEnv(["JIRA_URL_PARAM=${jiraUrl}", "JIRA_ISSUE_PARAM=${jiraIssue}"]) {
+            sh(label: 'Close JIRA issue', script: '''#!/bin/bash
+                set -eu
+                # Resolve script path: prefer WORKSPACE, fall back to /dist/shared (Docker)
+                if [[ -f "${WORKSPACE}/shared/jira_sync.py" ]]; then
+                    SCRIPT="${WORKSPACE}/shared/jira_sync.py"
+                elif [[ -f "/dist/shared/jira_sync.py" ]]; then
+                    SCRIPT="/dist/shared/jira_sync.py"
+                else
+                    echo "ERROR: jira_sync.py not found" >&2
+                    exit 1
+                fi
+                python3 "$SCRIPT" close \
+                    --jira-url "$JIRA_URL_PARAM" \
+                    --jira-user "$JIRA_USER" \
+                    --jira-password "$JIRA_PW" \
+                    --jira-issue "$JIRA_ISSUE_PARAM"
+              ''')
+        }
     }
 }
 
