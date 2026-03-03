@@ -13,8 +13,11 @@ def upload(String file, String pomFile, String artifactId, String groupId, Strin
                  echo "Adding licence information: "
                  sed -i 's/<\\/project>/<licenses><license><name>Apache-2.0<\\/name><url>https:\\/\\/www.apache.org\\/licenses\\/LICENSE-2.0.txt<\\/url><\\/license><\\/licenses><\\/project>/g' ${pomFile}
                fi
-               cat ${pomFile}
-               echo "Deploying: \${GROUP_ID}:\${ARTIFACT_ID} on file \${FILE} packaged as \${PACKAGING}  with version: \${VERSION}"
+                sed -i "0,/<groupId>[^<]*<\\/groupId>/s|<groupId>[^<]*</groupId>|<groupId>\${GROUP_ID}</groupId>|" ${pomFile}
+                sed -i "0,/<artifactId>[^<]*<\\/artifactId>/s|<artifactId>[^<]*</artifactId>|<artifactId>\${ARTIFACT_ID}</artifactId>|" ${pomFile}
+                sed -i "0,/<version>[^<]*<\\/version>/s|<version>[^<]*</version>|<version>\${VERSION}</version>|" ${pomFile}
+                cat ${pomFile}
+                echo "Deploying: \${GROUP_ID}:\${ARTIFACT_ID} on file \${FILE} packaged as \${PACKAGING}  with version: \${VERSION}"
                mvn deploy:deploy-file \
                  -DgroupId=\${GROUP_ID} \
                  -DartifactId=\${ARTIFACT_ID} \
