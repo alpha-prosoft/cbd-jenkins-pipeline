@@ -1,12 +1,11 @@
 def upload(String file, String pomFile, String artifactId, String groupId, String version, String repo, String repoId, String credentials) {
     ansiColor('xterm') {
+        withCredentials([usernamePassword(credentialsId: credentials, usernameVariable: 'REPO_USERNAME', passwordVariable: 'REPO_PASSWORD')]) {
             sh(label: "Upload file", script: """
                VERSION=${version}
                ARTIFACT_ID=${artifactId}
                GROUP_ID=${groupId}
                FILE=${file}
-               ARTIFACT_NAME=\$(basename \${FILE})
-               PACKAGING=\${ARTIFACT_NAME##*.}
                if grep -q "licenses" ${pomFile}; then
                  echo "File '${pomFile}' contains the word 'licences'"
                else
@@ -17,18 +16,17 @@ def upload(String file, String pomFile, String artifactId, String groupId, Strin
                 sed -i "0,/<artifactId>[^<]*<\\/artifactId>/s|<artifactId>[^<]*</artifactId>|<artifactId>\${ARTIFACT_ID}</artifactId>|" ${pomFile}
                 sed -i "0,/<version>[^<]*<\\/version>/s|<version>[^<]*</version>|<version>\${VERSION}</version>|" ${pomFile}
                 cat ${pomFile}
-                echo "Deploying: \${GROUP_ID}:\${ARTIFACT_ID} on file \${FILE} packaged as \${PACKAGING}  with version: \${VERSION}"
-               mvn deploy:deploy-file \
-                 -DgroupId=\${GROUP_ID} \
-                 -DartifactId=\${ARTIFACT_ID} \
-                 -Dversion=\${VERSION} \
-                 -Dpackaging=\${PACKAGING} \
-                 -Dfile=\${FILE} \
-                 -DrepositoryId=${repoId} \
-                 -DgeneratePom=false \
-                 -DpomFile=${pomFile} \
-                 -Durl=${repo}/
+                echo "Deploying: \${GROUP_ID}:\${ARTIFACT_ID} on file \${FILE} with version: \${VERSION}"
+                export CLOJARS_URL="${repo}"
+                export CLOJARS_USERNAME="\${REPO_USERNAME}"
+                export CLOJARS_PASSWORD="\${REPO_PASSWORD}"
+                clojure -Sdeps '{:deps {slipset/deps-deploy {:mvn/version "RELEASE"}}}' \\
+                  -X deps-deploy.deps-deploy/deploy \\
+                  :installer :remote \\
+                  :artifact '"'\${FILE}'"' \\
+                  :pom-file '"${pomFile}"'
             """)
+        }
     }
 }
 

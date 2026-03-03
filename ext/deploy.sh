@@ -162,7 +162,7 @@ echo "Resolving deployment parameters using params.py..."
 
 # Determine hosted zone suffix (can be overridden via HOSTED_ZONE_SUFFIX env var)
 # Default: ${EnvironmentNameLower}.alpha-prosoft.com (e.g., dev.alpha-prosoft.com)
-HOSTED_ZONE_SUFFIX="${HOSTED_ZONE_SUFFIX:-${EnvironmentNameUpper,,}.alpha-prosoft.com}"
+HOSTED_ZONE_SUFFIX="${HOSTED_ZONE_SUFFIX:-alpha-prosoft.com}"
 echo "Using hosted zone suffix: ${HOSTED_ZONE_SUFFIX}"
 
 # Build params.py arguments

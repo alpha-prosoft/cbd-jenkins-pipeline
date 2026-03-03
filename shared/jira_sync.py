@@ -82,17 +82,36 @@ def _jira_request(url, user, password, method="GET", data=None):
 # Core logic
 # ---------------------------------------------------------------------------
 
+def _get_available_transitions(jira_url, user, password, jira_issue):
+    """
+    Fetch the list of available transitions for a JIRA issue.
+
+    Returns a list of transition dicts with 'id', 'name', etc.
+    """
+    transitions_url = "{}/rest/api/2/issue/{}/transitions".format(jira_url, jira_issue)
+    log.info("Fetching available transitions for %s", jira_issue)
+    data = _jira_request(transitions_url, user, password)
+    return data.get("transitions", [])
+
+
+def _execute_transition(jira_url, user, password, jira_issue, transition):
+    """
+    Execute a specific transition (dict with 'id' and 'name') on a JIRA issue.
+    """
+    transitions_url = "{}/rest/api/2/issue/{}/transitions".format(jira_url, jira_issue)
+    log.info("Executing transition '%s' (id=%s) for %s", transition["name"], transition["id"], jira_issue)
+    payload = {"transition": {"id": transition["id"]}}
+    _jira_request(transitions_url, user, password, method="POST", data=payload)
+    log.info("Successfully transitioned %s via '%s'.", jira_issue, transition["name"])
+
+
 def _transition_issue(jira_url, user, password, jira_issue, target_status):
     """
     Transition a JIRA issue to the given target status (e.g. "In Progress", "Done").
 
     Returns True on success, raises on failure.
     """
-    transitions_url = "{}/rest/api/2/issue/{}/transitions".format(jira_url, jira_issue)
-
-    log.info("Fetching available transitions for %s", jira_issue)
-    data = _jira_request(transitions_url, user, password)
-    transitions = data.get("transitions", [])
+    transitions = _get_available_transitions(jira_url, user, password, jira_issue)
 
     target = next((t for t in transitions if t.get("name") == target_status), None)
     if target is None:
@@ -101,10 +120,7 @@ def _transition_issue(jira_url, user, password, jira_issue, target_status):
             "No '{}' transition found for {}. Available: {}".format(
                 target_status, jira_issue, available))
 
-    log.info("Executing transition '%s' (id=%s) for %s", target_status, target["id"], jira_issue)
-    payload = {"transition": {"id": target["id"]}}
-    _jira_request(transitions_url, user, password, method="POST", data=payload)
-    log.info("Successfully transitioned %s to '%s'.", jira_issue, target_status)
+    _execute_transition(jira_url, user, password, jira_issue, target)
     return True
 
 
@@ -132,13 +148,84 @@ def _parse_gerrit_message(raw_message, jira_issue):
     return summary, description
 
 
+def _fail(message):
+    """Log an error and print a JIRA_CHECK_FAILURE line to stdout for Jenkins
+    to capture, then return exit code 1."""
+    log.error(message)
+    # Machine-readable line for Jenkins to extract the failure reason
+    print("JIRA_CHECK_FAILURE: {}".format(message))
+    return 1
+
+
+def _transition_to_in_progress(jira_url, user, password, jira_issue, current_status):
+    """
+    Move a JIRA issue to 'In Progress', potentially via intermediate
+    transitions.
+
+    Some workflows require multiple steps (e.g. Backlog -> "Start Working"
+    lands on "In Progress").  This helper fetches the available transitions,
+    looks for "In Progress" first, then falls back to well-known intermediate
+    transitions ("Start Working") and verifies the resulting status.
+
+    Returns True on success, raises RuntimeError on failure.
+    """
+    # Names of transitions that are known to lead to "In Progress"
+    INTERMEDIATE_TRANSITIONS = ("Start Working",)
+
+    transitions = _get_available_transitions(jira_url, user, password, jira_issue)
+    available_names = [t.get("name") for t in transitions]
+
+    # 1) Direct "In Progress" transition (case-insensitive)
+    direct = next((t for t in transitions if (t.get("name") or "").lower() == "in progress"), None)
+    if direct:
+        _execute_transition(jira_url, user, password, jira_issue, direct)
+        return True
+
+    # 2) Try known intermediate transitions (case-insensitive)
+    for name in INTERMEDIATE_TRANSITIONS:
+        intermediate = next((t for t in transitions if (t.get("name") or "").lower() == name.lower()), None)
+        if intermediate:
+            log.info("No direct 'In Progress' transition; trying '%s' for %s.",
+                     name, jira_issue)
+            _execute_transition(jira_url, user, password, jira_issue, intermediate)
+
+            # Verify the issue actually reached "In Progress"
+            issue_url = "{}/rest/api/2/issue/{}".format(jira_url, jira_issue)
+            updated = _jira_request(issue_url, user, password)
+            new_status = updated.get("fields", {}).get("status", {}).get("name", "Unknown")
+            if new_status.lower() == "in progress":
+                log.info("Issue %s is now 'In Progress' after '%s' transition.",
+                         jira_issue, name)
+                return True
+
+            # Not in "In Progress" yet - try a second hop
+            log.info("After '%s', %s is '%s'; attempting second transition to 'In Progress'.",
+                     name, jira_issue, new_status)
+            try:
+                _transition_issue(jira_url, user, password, jira_issue, "In Progress")
+                return True
+            except Exception as exc:
+                raise RuntimeError(
+                    "Reached '{}' via '{}' but could not transition to 'In Progress': {}".format(
+                        new_status, name, exc))
+
+    raise RuntimeError(
+        "Cannot transition {} from '{}' to 'In Progress'. "
+        "Available transitions: {}".format(jira_issue, current_status, available_names))
+
+
+# Statuses that can be auto-transitioned to "In Progress"
+AUTO_TRANSITION_STATUSES = ("Created", "To Do", "Open", "Backlog")
+
+
 def cmd_check(args):
     """
     Validate JIRA ticket state and sync commit message -> JIRA fields.
 
-    If the ticket is in a "Created" / "To Do" / "Open" state, it will be
-    automatically transitioned to "In Progress".  The build only fails if
-    the transition itself fails (e.g. missing transition, permission error).
+    If the ticket is in a "Created" / "To Do" / "Open" / "Backlog" state,
+    it will be automatically transitioned to "In Progress".  The build only
+    fails if the transition itself fails (e.g. missing transition, permission
+    error).
 
     Exit codes:
       0  - success (ticket is valid, fields updated if needed)
@@ -152,14 +239,14 @@ def cmd_check(args):
     try:
         issue = _jira_request(issue_url, args.jira_user, args.jira_password)
     except Exception:
-        log.error("Failed to fetch JIRA issue %s", args.jira_issue)
-        return 1
+        return _fail("Failed to fetch JIRA issue {}".format(args.jira_issue))
 
     # Handle JIRA error responses
     if "errorMessages" in issue:
         for msg in issue["errorMessages"]:
             log.error("JIRA error for %s: %s", args.jira_issue, msg)
-        return 1
+        return _fail("JIRA error for {}: {}".format(
+            args.jira_issue, "; ".join(issue["errorMessages"])))
 
     fields = issue.get("fields", {})
     status_name = fields.get("status", {}).get("name", "Unknown")
@@ -172,22 +259,20 @@ def cmd_check(args):
     # -- Validate / fix status -------------------------------------------
     if status_name == "In Progress":
         log.info("JIRA issue %s is already 'In Progress'.", args.jira_issue)
-    elif status_name in ("Created", "To Do", "Open"):
+    elif status_name in AUTO_TRANSITION_STATUSES:
         log.info("JIRA issue %s is '%s' - attempting to move to 'In Progress'.",
                  args.jira_issue, status_name)
         try:
-            _transition_issue(jira_url, args.jira_user, args.jira_password,
-                              args.jira_issue, "In Progress")
+            _transition_to_in_progress(jira_url, args.jira_user, args.jira_password,
+                                       args.jira_issue, status_name)
         except Exception as exc:
-            log.error("Failed to transition %s from '%s' to 'In Progress': %s",
-                      args.jira_issue, status_name, exc)
-            return 1
+            return _fail("Failed to transition {} from '{}' to 'In Progress': {}".format(
+                args.jira_issue, status_name, exc))
     else:
-        log.error(
-            "JIRA issue %s is '%s' - cannot auto-transition to 'In Progress'. URL: %s",
-            args.jira_issue, status_name, issue_url,
-        )
-        return 1
+        return _fail(
+            "JIRA issue {} is '{}' - cannot auto-transition to 'In Progress'. "
+            "Please move the ticket to 'In Progress' (or 'Backlog'/'To Do') manually. "
+            "URL: {}".format(args.jira_issue, status_name, issue_url))
 
     # -- Skip BUG / STORY ------------------------------------------------
     if issue_type.upper() in ("BUG", "STORY"):
@@ -229,8 +314,7 @@ def cmd_check(args):
     try:
         _jira_request(issue_url, args.jira_user, args.jira_password, method="PUT", data=payload)
     except Exception:
-        log.error("Failed to update JIRA issue %s", args.jira_issue)
-        return 1
+        return _fail("Failed to update JIRA issue {} fields".format(args.jira_issue))
 
     log.info("JIRA issue %s updated successfully.", args.jira_issue)
     return 0
