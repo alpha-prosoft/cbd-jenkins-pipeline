@@ -249,27 +249,22 @@ def deploy_cloudformation(aws_region, stack_name, template_body, cf_parameters):
             print(f"Could not retrieve all stack events for {stack_name}: {event_error}")
         raise
 
-def get_stack_outputs(stack_region, resource_name, environment_name, base_stack_name):
+def get_stack_outputs(stack_region, environment_name, base_stack_name):
     """
     Retrieves outputs from a CloudFormation stack.
     
-    Constructs the full stack name as: {RESOURCE}-{ENV}-{BASE_STACK_NAME} (if resource_name provided)
-    or {ENV}-{BASE_STACK_NAME} (if resource_name is None)
+    Constructs the full stack name as: {ENV}-{BASE_STACK_NAME}
     and fetches all outputs from that stack.
     
     Args:
         stack_region: AWS region where the stack exists (per-stack)
-        resource_name: Resource name (converted to uppercase), optional - if None, omitted from stack name
         environment_name: Environment name (converted to uppercase)
         base_stack_name: Base stack name (e.g., "CORE-global", "vpc-setup")
         
     Returns:
         dict: {output_key: output_value, ...}
     """
-    if resource_name:
-        actual_stack_name = f"{resource_name.upper()}-{environment_name.upper()}-{base_stack_name}".replace('_', '-')
-    else:
-        actual_stack_name = f"{environment_name.upper()}-{base_stack_name}".replace('_', '-')
+    actual_stack_name = f"{environment_name.upper()}-{base_stack_name}".replace('_', '-')
     
     print(f"Attempting to retrieve outputs for stack: {actual_stack_name} in region {stack_region}...")
     cf_client = boto3.client('cloudformation', region_name=stack_region)
@@ -313,7 +308,7 @@ def get_stack_outputs(stack_region, resource_name, environment_name, base_stack_
     
     return retrieved_outputs
 
-def deploy(aws_account_id, aws_region, aws_cloudformation_file, deployment_name, deployment_type, environment_name, hosted_zone_suffix, resource_name=None, build_id=None, parent_stacks_csv=None, cli_params_list=None, upload_specs=None):
+def deploy(aws_account_id, aws_region, aws_cloudformation_file, resource_name, deployment_type, environment_name, hosted_zone_suffix, build_id=None, parent_stacks_csv=None, cli_params_list=None, upload_specs=None):
     print("Starting CloudFormation deployment process...")
     
     # Auto-detect AWS Account ID if not provided
@@ -332,8 +327,7 @@ def deploy(aws_account_id, aws_region, aws_cloudformation_file, deployment_name,
     
     print(f"Target AWS Region: {aws_region}")
     print(f"CloudFormation File: {aws_cloudformation_file}")
-    print(f"Resource Name: {resource_name if resource_name else '(not specified)'}")
-    print(f"Deployment Name: {deployment_name}")
+    print(f"Resource Name: {resource_name}")
     print(f"Deployment Type: {deployment_type}")
     print(f"Environment Name: {environment_name}")
     print(f"Hosted Zone Suffix: {hosted_zone_suffix}")
@@ -344,12 +338,10 @@ def deploy(aws_account_id, aws_region, aws_cloudformation_file, deployment_name,
     params = {
         "AccountId": aws_account_id,
         "Region": aws_region,
-        "DeploymentName": deployment_name,
+        "ResourceName": resource_name,
         "EnvironmentNameLower": environment_name.lower(),
         "EnvironmentNameUpper": environment_name.upper()
     }
-    if resource_name:
-        params["ResourceName"] = resource_name
     if build_id:
         params["BuildId"] = build_id
         print(f"Using provided BuildId: {build_id}")
@@ -453,17 +445,14 @@ def deploy(aws_account_id, aws_region, aws_cloudformation_file, deployment_name,
                     parent_stack_base_name = parent_entry
                     stack_region = aws_region  # Default to deployment region
                 
-                if resource_name:
-                    full_parent_stack_name = f"{resource_name.upper()}-{environment_name.upper()}-{parent_stack_base_name}".replace('_', '-')
-                else:
-                    full_parent_stack_name = f"{environment_name.upper()}-{parent_stack_base_name}".replace('_', '-')
+                full_parent_stack_name = f"{environment_name.upper()}-{parent_stack_base_name}".replace('_', '-')
                 
                 print(f"Retrieving outputs from parent stack: {full_parent_stack_name} in region {stack_region}...")
                 print(f"  Parent entry: {parent_entry}")
                 print(f"  Base stack name: {parent_stack_base_name}")
                 print(f"  Target region: {stack_region}")
                 
-                parent_outputs = get_stack_outputs(stack_region, resource_name, environment_name, parent_stack_base_name)
+                parent_outputs = get_stack_outputs(stack_region, environment_name, parent_stack_base_name)
                 
                 if parent_outputs:
                     print(f"Successfully retrieved {len(parent_outputs)} output(s) from parent stack {full_parent_stack_name}")
@@ -592,19 +581,11 @@ def deploy(aws_account_id, aws_region, aws_cloudformation_file, deployment_name,
         raise RuntimeError(error_msg)
 
     print("Constructing CloudFormation stack name...")
-    if resource_name:
-        stack_name_parts = [
-            resource_name.upper(),
-            environment_name.upper(),
-            deployment_type,
-            deployment_name
-        ]
-    else:
-        stack_name_parts = [
-            environment_name.upper(),
-            deployment_type,
-            deployment_name
-        ]
+    stack_name_parts = [
+        environment_name.upper(),
+        deployment_type,
+        resource_name
+    ]
     stack_name = "-".join(stack_name_parts).replace('_', '-')
     print(f"CloudFormation stack name determined: {stack_name}")
 
@@ -617,11 +598,11 @@ def deploy(aws_account_id, aws_region, aws_cloudformation_file, deployment_name,
     print(f"Retrieving outputs from deployed stack '{stack_name}'...")
     deployed_base_stack_name_parts = [
         deployment_type,
-        deployment_name
+        resource_name
     ]
     deployed_base_stack_name = "-".join(deployed_base_stack_name_parts).replace('_', '-')
     
-    deployed_stack_outputs = get_stack_outputs(aws_region, resource_name, environment_name, deployed_base_stack_name)
+    deployed_stack_outputs = get_stack_outputs(aws_region, environment_name, deployed_base_stack_name)
     print(f"Outputs from deployed stack '{stack_name}': {deployed_stack_outputs}")
     params.update(deployed_stack_outputs)
     print(f"Final parameters after merging outputs from deployed stack '{stack_name}': {params}")
@@ -633,8 +614,7 @@ if __name__ == "__main__":
     parser.add_argument("--aws-account-id", required=False, help="Your AWS Account ID. If not provided, will be auto-detected using get-caller-identity.")
     parser.add_argument("--aws-region", required=True, help="The AWS region for deployment (e.g., us-east-1).")
     parser.add_argument("--aws-cloudformation-file", required=True, help="Path to the CloudFormation template file.")
-    parser.add_argument("--resource-name", required=False, help="The name of the resource (optional). If not provided, stack names will be {ENV}-{TYPE}-{NAME} instead of {RESOURCE}-{ENV}-{TYPE}-{NAME}.")
-    parser.add_argument("--deployment-name", required=True, help="The name of the deployment.")
+    parser.add_argument("--resource-name", required=True, help="The name of the resource being deployed.")
     parser.add_argument("--deployment-type", required=True, help="The type of the deployment (e.g., service, job).")
     parser.add_argument("--environment-name", required=True, help="The name of the environment (e.g., dev, staging, prod).")
     parser.add_argument("--hosted-zone", required=True, help="The suffix of the hosted zone to search for (e.g., mycompany.com).")
@@ -654,11 +634,10 @@ if __name__ == "__main__":
     deploy(args.aws_account_id, 
            args.aws_region, 
            args.aws_cloudformation_file, 
-           args.deployment_name, 
+           args.resource_name,
            args.deployment_type, 
            args.environment_name,
            args.hosted_zone,
-           args.resource_name,
            args.build_id,
            args.parent_stacks,
            args.param,
