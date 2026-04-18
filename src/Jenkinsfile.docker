@@ -37,9 +37,21 @@ node(agentLabel) {
           
           if [[ -f ./gen-ansible.sh ]]; then
             ./gen-ansible.sh
-            if [ -n "\$(git status --porcelain)" ]; then
+            # Only check files gen-ansible.sh manages: tracked files and
+            # generated 5-Dockerfile.* files. Pipeline-injected paths like
+            # shared/, scripts/, ext/ are ignored here.
+            changes=\$( { git diff --name-only; git ls-files --others --exclude-standard -- '5-Dockerfile.*'; } )
+            if [ -n "\$changes" ]; then
               echo "Please regenerate ansible stuff and commit"
-              echo git status
+              echo "---- changed files ----"
+              echo "\$changes"
+              echo "---- git diff ----"
+              git --no-pager diff
+              echo "---- untracked generated files ----"
+              git ls-files --others --exclude-standard -- '5-Dockerfile.*' | while read -r f; do
+                echo "--- NEW FILE: \$f ---"
+                cat "\$f"
+              done
               exit 1
             fi
           fi
