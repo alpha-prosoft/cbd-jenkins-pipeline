@@ -16,7 +16,7 @@ node("aws-dev-worker") {
         getItems().each { name ->
             echo("Analyzing : " + name)
 
-            if (name.startsWith("glms-service/")) {
+            if (name.startsWith((env.SERVICE_FOLDER ?: "glms-service") + "/")) {
                 items[name] = {
                     build job: name,
                             parameters: [[$class: 'BooleanParameterValue', name: 'DEPLOY_TO_PROD', value: env.DEPLOY_TO_PROD],

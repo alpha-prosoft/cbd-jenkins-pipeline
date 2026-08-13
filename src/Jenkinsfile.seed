@@ -1,0 +1,16 @@
+node('master') {
+    stage('Checkout') {
+        checkout scm
+        dir('seed') {
+            git url: env.GIT_URL, credentialsId: 'gerrit-ssh', branch: 'master'
+        }
+    }
+    stage('Generate jobs') {
+        jobDsl targets: 'src/jobs/**/*.groovy',
+               removedJobAction: 'DELETE',
+               removedViewAction: 'DELETE',
+               removedConfigFilesAction: 'DELETE',
+               lookupStrategy: 'JENKINS_ROOT',
+               additionalParameters: [seedRepoUrl: env.GIT_URL]
+    }
+}
