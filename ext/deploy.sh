@@ -83,19 +83,32 @@ echo "We are running inside ${work_dir}"
 echo "Setting up ansible directories"
 mkdir -p $work_dir/group_vars
 
-SESSION_TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+SESSION_TOKEN=$(curl -s -m 2 -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" || true)
 
-if [[ -z "${SESSION_TOKEN}" ]]; then
-  echo "ERROR: Failed to retrieve EC2 metadata session token"
-  exit 1
+if [[ -n "${SESSION_TOKEN}" ]]; then
+  echo "Running on EC2 - using instance metadata"
+  export AWS_DEFAULT_REGION=$(curl -s -H "X-aws-ec2-metadata-token: $SESSION_TOKEN" \
+    http://169.254.169.254/latest/dynamic/instance-identity/document | jq -r .region)
+
+  CURRENT_ROLE=$(curl -H "X-aws-ec2-metadata-token: $SESSION_TOKEN" http://169.254.169.254/latest/meta-data/iam/security-credentials/)
+  curl -o security-credentials.json -H "X-aws-ec2-metadata-token: $SESSION_TOKEN" \
+    http://169.254.169.254/latest/meta-data/iam/security-credentials/${CURRENT_ROLE}/
+
+  export PIPELINE_AWS_ACCESS_KEY_ID=$(jq -r '.AccessKeyId' security-credentials.json)
+  export PIPELINE_AWS_SECRET_ACCESS_KEY=$(jq -r '.SecretAccessKey' security-credentials.json)
+  export PIPELINE_AWS_SESSION_TOKEN=$(jq -r '.Token' security-credentials.json)
+  export PIPELINE_ACCOUNT_ID=$(curl -s http://169.254.169.254/latest/dynamic/instance-identity/document | jq -r '.accountId')
+else
+  echo "Not on EC2 - using ambient AWS credentials (pipeline account == current credentials)"
+  export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-$(aws configure get region || true)}"
+  export PIPELINE_AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-}"
+  export PIPELINE_AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-}"
+  export PIPELINE_AWS_SESSION_TOKEN="${AWS_SESSION_TOKEN:-}"
+  export PIPELINE_ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
 fi
 
-export AWS_DEFAULT_REGION=$(curl -s -H "X-aws-ec2-metadata-token: $SESSION_TOKEN" \
-  http://169.254.169.254/latest/dynamic/instance-identity/document |
-  jq -r .region)
-
 if [[ -z "${AWS_DEFAULT_REGION}" || "${AWS_DEFAULT_REGION}" == "null" ]]; then
-  echo "ERROR: Failed to retrieve AWS_DEFAULT_REGION from instance metadata"
+  echo "ERROR: AWS_DEFAULT_REGION could not be determined"
   exit 1
 fi
 
@@ -107,15 +120,6 @@ SESSION=$(aws sts assume-role \
   --role-session-name "${ResourceName}-deployment-${BUILD_ID}" \
   --endpoint https://sts.${AWS_DEFAULT_REGION}.amazonaws.com \
   --region ${AWS_DEFAULT_REGION})
-
-CURRENT_ROLE=$(curl -H "X-aws-ec2-metadata-token: $SESSION_TOKEN" http://169.254.169.254/latest/meta-data/iam/security-credentials/)
-curl -o security-credentials.json -H "X-aws-ec2-metadata-token: $SESSION_TOKEN" \
-  http://169.254.169.254/latest/meta-data/iam/security-credentials/${CURRENT_ROLE}/
-
-export PIPELINE_AWS_ACCESS_KEY_ID=$(cat security-credentials.json | jq -r '.AccessKeyId')
-export PIPELINE_AWS_SECRET_ACCESS_KEY=$(cat security-credentials.json | jq -r '.SecretAccessKey')
-export PIPELINE_AWS_SESSION_TOKEN=$(cat security-credentials.json | jq -r '.Token')
-export PIPELINE_ACCOUNT_ID=$(curl -s http://169.254.169.254/latest/dynamic/instance-identity/document | jq -r '.accountId')
 
 # Validate pipeline credentials
 if [[ -z "${PIPELINE_AWS_ACCESS_KEY_ID}" || "${PIPELINE_AWS_ACCESS_KEY_ID}" == "null" ]]; then

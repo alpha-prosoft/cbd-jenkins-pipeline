@@ -169,7 +169,9 @@ def get_hosted_zone_data(aws_region, hosted_zone_suffix):
     if not hosted_zone_info["PublicHostedZoneName"]:
         print(f"Warning: Public hosted zone ending with '{search_suffix}' not found.")
     if not hosted_zone_info["PrivateHostedZoneName"]:
-        print(f"Warning: Private hosted zone ending with '{search_suffix}' not found.")
+        print(f"Warning: Private hosted zone ending with '{search_suffix}' not found, using public zone for private records.")
+        hosted_zone_info["PrivateHostedZoneName"] = hosted_zone_info["PublicHostedZoneName"]
+        hosted_zone_info["PrivateHostedZoneId"] = hosted_zone_info["PublicHostedZoneId"]
 
     print(f"Retrieved Hosted Zone Info: {hosted_zone_info}")
     return hosted_zone_info
