@@ -495,9 +495,17 @@ def checkJira() {
            set -eu
            output=$(mktemp)
            target_url="https://${GERRIT_URL}/a/changes/${GERRIT_CHANGE_ID}/revisions/${GERRIT_PATCHSET_REVISION}/commit"
-           curl -b ~/.gitcookie --fail -s $target_url -o $output
-           tail -n +2 $output | jq -r ".message"
-           rm -f $output
+           echo "INFO: Fetching commit from: ${target_url}" >&2
+           http_status=$(curl -b ~/.gitcookie -s -w "%{http_code}" "${target_url}" -o "${output}")
+           if [ "${http_status}" -ge 400 ]; then
+               echo "ERROR: Gerrit returned HTTP ${http_status} for ${target_url}" >&2
+               echo "ERROR: Response: $(head -c 500 "${output}")" >&2
+               [ -f ~/.gitcookie ] || echo "ERROR: ~/.gitcookie does not exist on this agent" >&2
+               rm -f "${output}"
+               exit 22
+           fi
+           tail -n +2 "${output}" | jq -r ".message"
+           rm -f "${output}"
            ''').trim()
         echo "INFO: Commit message: ${gerritMessage}"
 
