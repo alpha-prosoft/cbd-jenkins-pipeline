@@ -59,6 +59,7 @@ node(agentLabel) {
 
         unstash 'jenkinsfile-scripts'
 
+        withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-pipeline', accessKeyVariable: 'AWS_ACCESS_KEY_ID', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']]) {
         sh """#!/bin/bash
           set -euo pipefail
 
@@ -67,6 +68,11 @@ node(agentLabel) {
           echo "docker: "
           ls -la /var/run/docker.sock
           echo "done"
+
+          aws_credentials_file=\$(mktemp)
+          trap 'rm -f "\${aws_credentials_file}"' EXIT
+          chmod 600 "\${aws_credentials_file}"
+          printf '[default]\\naws_access_key_id = %s\\naws_secret_access_key = %s\\n' "\${AWS_ACCESS_KEY_ID}" "\${AWS_SECRET_ACCESS_KEY}" > "\${aws_credentials_file}"
 
           for i in \$(ls *-Dockerfile.* | sort); do 
             echo "Building \${i}"
@@ -91,11 +97,14 @@ node(agentLabel) {
               --build-arg BUILD_NUMBER=${BUILD_NUMBER} \
               --build-arg BUILD_ID=${BUILD_NUMBER} \
               --build-arg DEPLOY_TARGET=DEV \
+              --build-arg AWS_REGION="\${AWS_DEFAULT_REGION:-}" \
+              --secret id=aws-credentials,src="\${aws_credentials_file}" \
               -t "${env.DOCKER_URL}/${DOCKER_ORG}/\${i#*.}:local-build" \
               -t "${env.DOCKER_URL}/${DOCKER_ORG}/\${i#*.}:b${BUILD_NUMBER}" .
             cd ../../
           done
         """
+        }
     }
     stage("Deploy") {
         withCredentials([usernamePassword(credentialsId: 'docker-http', usernameVariable: 'USERNAME', passwordVariable: "PASSWORD")]) {

@@ -45,17 +45,27 @@ node(agentLabel) {
 
         unstash 'jenkinsfile-scripts'
 
-        ansiColor('xterm') {
-            sh """
+        withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-pipeline', accessKeyVariable: 'AWS_ACCESS_KEY_ID', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']]) {
+         ansiColor('xterm') {
+            sh """#!/bin/bash
               set -ex
+
+              aws_credentials_file=\$(mktemp)
+              trap 'rm -f "\${aws_credentials_file}"' EXIT
+              chmod 600 "\${aws_credentials_file}"
+              printf '[default]\\naws_access_key_id = %s\\naws_secret_access_key = %s\\n' "\${AWS_ACCESS_KEY_ID}" "\${AWS_SECRET_ACCESS_KEY}" > "\${aws_credentials_file}"
+
               docker build --network=host \
                 --pull ${GLOBAL_PROPERTIES_DOCKER_BUILD_ARGS} \
                 --build-arg APP_VERSION=1.0.b${BUILD_NUMBER} \
                 --build-arg BUILD_ID=${BUILD_NUMBER} \
                 --build-arg BUILD_NUMBER=${BUILD_NUMBER} \
                 --build-arg DEPLOY_TARGET="${deployTarget}" \
+                --build-arg AWS_REGION="\${AWS_DEFAULT_REGION:-}" \
+                --secret id=aws-credentials,src="\${aws_credentials_file}" \
                 -t "${env.DOCKER_URL}/${DOCKER_ORG}/${JOB_BASE_NAME}:b${BUILD_NUMBER}" .
               """
+         }
         }
     }
     stage("Deploy") {
