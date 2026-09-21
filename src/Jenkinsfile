@@ -52,7 +52,8 @@ node(agentLabel) {
 
         configFileProvider([configFile(fileId: 'global-maven-settings', variable: 'MAVEN_SETTINGS')]) {
          withCredentials([usernamePassword(credentialsId: 'docker-http', usernameVariable: 'DOCKER_USERNAME', passwordVariable: "DOCKER_PASSWORD"),
-                          usernamePassword(credentialsId: 'gerrit-http', usernameVariable: 'GIT_USERNAME', passwordVariable: "GIT_PASSWORD")]) {
+                          usernamePassword(credentialsId: 'gerrit-http', usernameVariable: 'GIT_USERNAME', passwordVariable: "GIT_PASSWORD"),
+                          [$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-pipeline', accessKeyVariable: 'AWS_ACCESS_KEY_ID', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']]) {
           ansiColor('xterm') {
 
             sh 'ls -la'
@@ -62,15 +63,19 @@ node(agentLabel) {
               docker login --username "\${DOCKER_USERNAME}" --password "\${DOCKER_PASSWORD}" ${env.DOCKER_PUSH_URL}
 
               netrc_file=\$(mktemp)
-              trap 'rm -f "\${netrc_file}"' EXIT
-              chmod 600 "\${netrc_file}"
+              aws_credentials_file=\$(mktemp)
+              trap 'rm -f "\${netrc_file}" "\${aws_credentials_file}"' EXIT
+              chmod 600 "\${netrc_file}" "\${aws_credentials_file}"
               printf 'machine %s\\nlogin %s\\npassword %s\\n' "\${GERRIT_URL}" "\${GIT_USERNAME}" "\${GIT_PASSWORD}" > "\${netrc_file}"
+              printf '[default]\\naws_access_key_id = %s\\naws_secret_access_key = %s\\n' "\${AWS_ACCESS_KEY_ID}" "\${AWS_SECRET_ACCESS_KEY}" > "\${aws_credentials_file}"
 
               docker build --pull ${GLOBAL_PROPERTIES_DOCKER_BUILD_ARGS} \
                    --build-arg BUILD_ID=\${BUILD_NUMBER} \
                    --build-arg BUILD_NUMBER=\${BUILD_NUMBER} \
                    --secret id=netrc,src="\${netrc_file}" \
                    --secret id=settings.xml,src=$MAVEN_SETTINGS \
+                   --secret id=aws-credentials,src="\${aws_credentials_file}" \
+                   --build-arg AWS_REGION="\${AWS_DEFAULT_REGION:-}" \
                    --build-arg DEPLOY_TARGET="${deployTarget}" \
                    -t "${env.DOCKER_URL}/${DOCKER_ORG}/\${JOB_BASE_NAME}:b\${BUILD_NUMBER}"  .
 
@@ -79,6 +84,8 @@ node(agentLabel) {
                 docker build --pull \${GLOBAL_PROPERTIES_DOCKER_BUILD_ARGS} \
                    --secret id=netrc,src="\${netrc_file}" \
                    --secret id=settings.xml,src=$MAVEN_SETTINGS \
+                   --secret id=aws-credentials,src="\${aws_credentials_file}" \
+                   --build-arg AWS_REGION="\${AWS_DEFAULT_REGION:-}" \
                    --build-arg BUILD_ID=\${BUILD_NUMBER} \
                    --build-arg BUILD_NUMBER=\${BUILD_NUMBER} \
                    -t "${env.DOCKER_URL}/${DOCKER_ORG}/\${JOB_BASE_NAME}-runtime:b\${BUILD_NUMBER}" -f Dockerfile.runtime .
@@ -122,6 +129,7 @@ node(agentLabel) {
 
       unstash 'jenkinsfile-scripts'
       configFileProvider([configFile(fileId: 'global-maven-settings', variable: 'MAVEN_SETTINGS')]) {
+       withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-pipeline', accessKeyVariable: 'AWS_ACCESS_KEY_ID', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']]) {
         withDockerContainer(args: """--group-add 999
                                    --workdir="/home/build"
                                    -v /home/jenkins/.gitconfig:/home/build/.gitconfig
@@ -260,6 +268,7 @@ node(agentLabel) {
                 }
             }
           }
+       }
         }
     }
     catch (Exception ex) {

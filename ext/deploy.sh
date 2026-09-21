@@ -132,7 +132,7 @@ if [[ -z "${PIPELINE_AWS_SECRET_ACCESS_KEY}" || "${PIPELINE_AWS_SECRET_ACCESS_KE
   exit 1
 fi
 
-if [[ -z "${PIPELINE_AWS_SESSION_TOKEN}" || "${PIPELINE_AWS_SESSION_TOKEN}" == "null" ]]; then
+if [[ -n "${SESSION_TOKEN}" && ( -z "${PIPELINE_AWS_SESSION_TOKEN}" || "${PIPELINE_AWS_SESSION_TOKEN}" == "null" ) ]]; then
   echo "ERROR: Failed to retrieve PIPELINE_AWS_SESSION_TOKEN"
   exit 1
 fi

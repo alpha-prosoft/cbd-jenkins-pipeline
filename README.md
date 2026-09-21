@@ -13,6 +13,7 @@ GLOBAL_PROPERTIES_AWS_ACCOUNTS={ "accounts": [ { "id": "1", "owner": "first1.las
 GLOBAL_PROPERTIES_DOCKER_BUILD_ARGS=--build-arg ARTIFACT_VERSION=${ARTIFACT_VERSION:-} --build-arg ARTIFACT_ID=${ARTIFACT_ID:-} --build-arg SOURCE_URL=${SOURCE_URL:-} --build-arg BUILD_ID=${BUILD_ID} --ssh default --progress plain
 GLOBAL_PROPERTIES_PROD_AWS_ACCOUNT=456789123456
 GLOBAL_PROPERTIES_TEST_AWS_ACCOUNT=7891234567891
+AWS_DEFAULT_REGION=eu-central-1 # region used by builds and deploys; falls back to EC2 instance metadata when unset
 GLOBAL_REPOSITORY_DEV_URL=https://nexus.example.com/dev
 GLOBAL_REPOSITORY_PROD_URL=https://nexus.example.com/prod
 GLOBAL_GROUP_ID=com.example
@@ -28,6 +29,7 @@ artifact-deploy-dev-http # username/password for deploying artifacts (i.e. nexus
 artifact-deploy-prod-http # username/password for deploying artifacts (i.e. nexus)
 docker-http # username/password for pushing docker images to registry
 gerrit-http # username/password for non-interractive user in gerrit
+aws-pipeline # AWS credentials (access key id/secret) for the pipeline account; used to assume PipelineRole/DeliveryRole in target accounts
 ```
 
 # Development
