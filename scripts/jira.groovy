@@ -2,7 +2,7 @@
 // Inline jira_sync.py so it is always available regardless of workspace
 // layout, volume mounts or execution context (master, agent, Docker).
 // ---------------------------------------------------------------------------
-jiraSyncScript = '''\
+@groovy.transform.Field String jiraSyncScript = '''\
 #!/usr/bin/env python3
 """
 JIRA Sync - Keeps commit messages and JIRA tickets in sync.
@@ -483,7 +483,7 @@ def findUrlForTicket(String urls, String ticket) {
 
 def checkJira() {
     withCredentials([usernamePassword(credentialsId: 'jira-http', passwordVariable: 'JIRA_PW', usernameVariable: 'JIRA_USER'),
-                     sshUserPrivateKey(credentialsId: 'gerrit-ssh', keyFileVariable: 'SSHFILEPATH', passphraseVariable: 'SSHPASSPHRASE', usernameVariable: 'SSHUSERNAME')]) {
+                     usernamePassword(credentialsId: 'gerrit-http', passwordVariable: 'GERRIT_PW', usernameVariable: 'GERRIT_USER')]) {
         echo "INFO: Check jira ticket status"
         if (!env.GERRIT_CHANGE_SUBJECT) {
             echo "INFO: skipping JIRA check - not a Gerrit build"
@@ -495,15 +495,15 @@ def checkJira() {
            set -eu
            output=$(mktemp)
            target_url="https://${GERRIT_URL}/a/changes/${GERRIT_CHANGE_ID}/revisions/${GERRIT_PATCHSET_REVISION}/commit"
-           echo "INFO: Fetching commit from: ${target_url}" >&2
-           http_status=$(curl -b ~/.gitcookie -s -w "%{http_code}" "${target_url}" -o "${output}")
+           echo "INFO: Fetching commit as ${GERRIT_USER} from: ${target_url}" >&2
+           http_status=$(curl -u "${GERRIT_USER}:${GERRIT_PW}" -sS -w "%{http_code}" "${target_url}" -o "${output}")
            if [ "${http_status}" -ge 400 ]; then
                echo "ERROR: Gerrit returned HTTP ${http_status} for ${target_url}" >&2
                echo "ERROR: Response: $(head -c 500 "${output}")" >&2
-               [ -f ~/.gitcookie ] || echo "ERROR: ~/.gitcookie does not exist on this agent" >&2
                rm -f "${output}"
                exit 22
            fi
+           echo "INFO: Gerrit returned HTTP ${http_status}" >&2
            tail -n +2 "${output}" | jq -r ".message"
            rm -f "${output}"
            ''').trim()

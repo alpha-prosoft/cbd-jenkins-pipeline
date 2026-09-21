@@ -1,3 +1,21 @@
+@groovy.transform.Field String gerritPostFn = '''
+gerrit_post() {
+    local url="$1" body="$2" output http_status
+    output=$(mktemp)
+    echo "INFO: POST as ${GERRIT_USER} to: ${url}" >&2
+    http_status=$(curl -u "${GERRIT_USER}:${GERRIT_PW}" -sS -w "%{http_code}" -H "Content-Type: application/json" --data "${body}" "${url}" -o "${output}")
+    if [ "${http_status}" -ge 400 ]; then
+        echo "ERROR: Gerrit returned HTTP ${http_status} for ${url}" >&2
+        echo "ERROR: Response: $(head -c 500 "${output}")" >&2
+        rm -f "${output}"
+        return 22
+    fi
+    echo "INFO: Gerrit returned HTTP ${http_status}" >&2
+    cat "${output}"
+    rm -f "${output}"
+}
+'''
+
 def doCheckout() {
   checkout([$class: 'GitSCM',
    branches: [[name: 'master']],
@@ -24,13 +42,13 @@ def doCheckout() {
 
 def checkSubmitStatus(deployTarget) {
   if (deployTarget == "PROD" && env.GERRIT_CHANGE_ID) {
-    withCredentials([sshUserPrivateKey(credentialsId: 'gerrit-ssh',
-                                       keyFileVariable: 'SSHFILEPATH',
-                                       passphraseVariable: 'SSHPASSPHRASE',
-                                       usernameVariable: 'SSHUSERNAME')]) {
+    withCredentials([usernamePassword(credentialsId: 'gerrit-http',
+                                      passwordVariable: 'GERRIT_PW',
+                                      usernameVariable: 'GERRIT_USER')]) {
       String submitStatus = sh(label: 'Check submit status', returnStdout: true, script:
             """#!/bin/bash
             set -euo pipefail
+            ${gerritPostFn}
             CHECK_GERRIT_BUILD="${env.GERRIT_CHANGE_SUBJECT}"
             echo "INFO: Checking submit status for change ${GERRIT_CHANGE_ID}, patchset ${GERRIT_PATCHSET_REVISION}"
             echo "INFO: GERRIT_CHANGE_SUBJECT=\${CHECK_GERRIT_BUILD}"
@@ -42,8 +60,8 @@ def checkSubmitStatus(deployTarget) {
             ACTIONS_URL="https://${GERRIT_URL}/a/changes/${GERRIT_CHANGE_ID}/revisions/${GERRIT_PATCHSET_REVISION}/actions"
             echo "INFO: Fetching actions from: \${ACTIONS_URL}"
 
-            RAW_RESPONSE=\$(curl -b ~/.gitcookie --fail -s "\${ACTIONS_URL}") || {
-                echo "ERROR: curl request to Gerrit actions API failed with exit code \$?"
+            RAW_RESPONSE=\$(curl -u "\${GERRIT_USER}:\${GERRIT_PW}" --fail -sS "\${ACTIONS_URL}") || {
+                echo "ERROR: curl request to Gerrit actions API as \${GERRIT_USER} failed with exit code \$?"
                 exit 0
             }
 
@@ -73,8 +91,7 @@ def checkSubmitStatus(deployTarget) {
                 echo "INFO: Ready to submit, adding Patch-Set-Lock"
                 LOCK_URL="https://${GERRIT_URL}/a/changes/${GERRIT_CHANGE_ID}/revisions/current/review"
                 echo "INFO: Posting Patch-Set-Lock to: \${LOCK_URL}"
-                curl -b ~/.gitcookie --fail -s "\${LOCK_URL}" \
-                         --data '{"message": "Ready for production","labels":{"Patch-Set-Lock": 1}}' > /dev/null
+                gerrit_post "\${LOCK_URL}" '{"message": "Ready for production","labels":{"Patch-Set-Lock": 1}}' > /dev/null
                 echo "INFO: Patch-Set-Lock applied successfully"
             fi
             """).trim()
@@ -101,34 +118,36 @@ def checkSubmitStatus(deployTarget) {
 }
 
 def submitChange() {
-  withCredentials([sshUserPrivateKey(credentialsId: 'gerrit-ssh', keyFileVariable: 'SSHFILEPATH', passphraseVariable: 'SSHPASSPHRASE', usernameVariable: 'SSHUSERNAME')]) {
+  withCredentials([usernamePassword(credentialsId: 'gerrit-http', passwordVariable: 'GERRIT_PW', usernameVariable: 'GERRIT_USER')]) {
     if (env.GERRIT_CHANGE_ID) {
       sh(label: "Submit change", script: """#!/bin/bash
+        set -eo pipefail
+        ${gerritPostFn}
         CHECK_GERRIT_BUILD="${env.GERRIT_CHANGE_SUBJECT}"
         if [[ "\${CHECK_GERRIT_BUILD}" == null ]] ; then
           echo "INFO: skipping Gerrit submit"
           exit 0
         fi
-        curl -b ~/.gitcookie --fail https://${GERRIT_URL}/a/changes/${GERRIT_CHANGE_ID}/revisions/current/review \
-             --data '{"message": "Looking good","labels":{"Verified": 1}}'
-             
-        curl -b ~/.gitcookie --fail https://${GERRIT_URL}/a/changes/${GERRIT_CHANGE_ID}/submit \
-             --data '{}'
+        gerrit_post "https://${GERRIT_URL}/a/changes/${GERRIT_CHANGE_ID}/revisions/current/review" \
+             '{"message": "Looking good","labels":{"Verified": 1}}'
+        gerrit_post "https://${GERRIT_URL}/a/changes/${GERRIT_CHANGE_ID}/submit" '{}'
       """)
     }
   }
 }
 
 def unlockPatchSet () {
-  withCredentials([sshUserPrivateKey(credentialsId: 'gerrit-ssh', keyFileVariable: 'SSHFILEPATH', passphraseVariable: 'SSHPASSPHRASE', usernameVariable: 'SSHUSERNAME')]) {
+  withCredentials([usernamePassword(credentialsId: 'gerrit-http', passwordVariable: 'GERRIT_PW', usernameVariable: 'GERRIT_USER')]) {
     sh(label: "Unlock patchset", script: """#!/bin/bash
+      set -eo pipefail
+      ${gerritPostFn}
       CHECK_GERRIT_BUILD="${env.GERRIT_CHANGE_SUBJECT}"
       if [[ "\${CHECK_GERRIT_BUILD}" == null ]] ; then
         echo "INFO: skipping Gerrit unlockPatchSet"
         exit 0
       fi
-      curl -b ~/.gitcookie --fail https://${GERRIT_URL}/a/changes/${GERRIT_CHANGE_ID}/revisions/current/review \
-             --data '{"message": "Unlocking","labels":{"Patch-Set-Lock": 0}}'
+      gerrit_post "https://${GERRIT_URL}/a/changes/${GERRIT_CHANGE_ID}/revisions/current/review" \
+             '{"message": "Unlocking","labels":{"Patch-Set-Lock": 0}}'
 
     """)
   }
