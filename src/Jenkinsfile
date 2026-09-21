@@ -61,10 +61,15 @@ node(agentLabel) {
               cat $MAVEN_SETTINGS
               docker login --username "\${DOCKER_USERNAME}" --password "\${DOCKER_PASSWORD}" ${env.DOCKER_PUSH_URL}
 
+              netrc_file=\$(mktemp)
+              trap 'rm -f "\${netrc_file}"' EXIT
+              chmod 600 "\${netrc_file}"
+              printf 'machine %s\\nlogin %s\\npassword %s\\n' "\${GERRIT_URL}" "\${GIT_USERNAME}" "\${GIT_PASSWORD}" > "\${netrc_file}"
+
               docker build --pull ${GLOBAL_PROPERTIES_DOCKER_BUILD_ARGS} \
                    --build-arg BUILD_ID=\${BUILD_NUMBER} \
                    --build-arg BUILD_NUMBER=\${BUILD_NUMBER} \
-                   --secret id=gitcookie,src=/home/jenkins/.gitcookie \
+                   --secret id=netrc,src="\${netrc_file}" \
                    --secret id=settings.xml,src=$MAVEN_SETTINGS \
                    --build-arg DEPLOY_TARGET="${deployTarget}" \
                    -t "${env.DOCKER_URL}/${DOCKER_ORG}/\${JOB_BASE_NAME}:b\${BUILD_NUMBER}"  .
@@ -72,7 +77,7 @@ node(agentLabel) {
               if [[ -f Dockerfile.runtime ]]; then
                 echo "Building runtime image"
                 docker build --pull \${GLOBAL_PROPERTIES_DOCKER_BUILD_ARGS} \
-                   --secret id=gitcookie,src=/home/jenkins/.gitcookie \
+                   --secret id=netrc,src="\${netrc_file}" \
                    --secret id=settings.xml,src=$MAVEN_SETTINGS \
                    --build-arg BUILD_ID=\${BUILD_NUMBER} \
                    --build-arg BUILD_NUMBER=\${BUILD_NUMBER} \
