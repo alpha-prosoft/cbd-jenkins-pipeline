@@ -132,9 +132,7 @@ node(agentLabel) {
        withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-pipeline', accessKeyVariable: 'AWS_ACCESS_KEY_ID', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY']]) {
         withDockerContainer(args: """--group-add 999
                                    --workdir="/home/build"
-                                   -v /home/jenkins/.gitconfig:/home/build/.gitconfig
                                    -v $MAVEN_SETTINGS:/home/build/.m2/settings.xml
-                                   -v /home/jenkins/.gitcookie:/home/build/.gitcookie
                                    -v #PWD/ext/deploy.sh/
                                    -v ${WORKSPACE}/ext:/dist/ext
                                    -v ${WORKSPACE}/shared:/dist/shared
