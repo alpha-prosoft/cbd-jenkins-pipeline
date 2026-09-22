@@ -80,8 +80,6 @@ node("aws-dev-worker") {
     String dockerImage = "${env.DOCKER_URL}/glms/glms-base-img:b" + buildId
     String runArgs = "--group-add 999 " +
             "-v $SSH_AUTH_SOCK:/home/build/ssh-agent " +
-            "-v /home/jenkins/.gitconfig:/home/build/.gitconfig " + 
-            "-v /home/jenkins/.gitcookie:/home/build/.gitcookie " +
             "--env SSH_AUTH_SOCK=/home/build/ssh-agent " +
             "-v /var/run/docker.sock:/var/run/docker.sock"
     withDockerContainer(args: runArgs,
