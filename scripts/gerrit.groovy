@@ -159,10 +159,10 @@ def maybePushToPublic() {
    withCredentials([usernamePassword(credentialsId: "github-http", usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
      sh(label: "Push to public", script: """#!/bin/bash
          set -e
-         echo "Pushing to public \$last_commit_id"
          last_commit_id=\$(git log --format="%H" -n 1)
-         git config credential.helper '!f() { sleep 1; echo "username=${GIT_USERNAME}"; echo "password=${GIT_PASSWORD}"; }; f'
-         git push --force ${env.PUBLIC_URL} \$last_commit_id:refs/heads/master
+         echo "Pushing to public \$last_commit_id"
+         git -c credential.helper='!f() { echo "username=\$GIT_USERNAME"; echo "password=\$GIT_PASSWORD"; }; f' \\
+           push --force ${env.PUBLIC_URL} \$last_commit_id:refs/heads/master
      """)
      }
   }
