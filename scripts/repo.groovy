@@ -20,6 +20,9 @@ def upload(String file, String pomFile, String artifactId, String groupId, Strin
                 export CLOJARS_URL="${repo}"
                 export CLOJARS_USERNAME="\${REPO_USERNAME}"
                 export CLOJARS_PASSWORD="\${REPO_PASSWORD}"
+                # deps-deploy only needs itself: outside the checkout the project's
+                # deps (e.g. dev-feed versions) are not resolved
+                cd "\$(mktemp -d)"
                 clojure -Sdeps '{:deps {slipset/deps-deploy {:mvn/version "RELEASE"}}}' \\
                   -X deps-deploy.deps-deploy/deploy \\
                   :installer :remote \\
